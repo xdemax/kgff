@@ -137,19 +137,20 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
     QProcess p;
     p.setProcessEnvironment(cleanChildEnvironment());
     p.setProgram(za);
-    // Пароль передаётся аргументом -p<пароль>: на macOS 7za не читает пароль из stdin
-    // в неинтерактивном режиме (падает с "Wrong password"). Пароль и так обфусцирован
-    // в бинарнике, поэтому видимость в списке процессов не ухудшает защиту.
-    QByteArray key = extraKey();
+    // -p без значения: 7za читает пароль из stdin (не виден в списке процессов).
     p.setArguments(QStringList() << QStringLiteral("x") << archivePath
                                  << QStringLiteral("-o") + outDir
-                                 << QStringLiteral("-y") << QStringLiteral("-p") + QString::fromUtf8(key));
-    key.fill('\0');
+                                 << QStringLiteral("-y") << QStringLiteral("-p"));
     p.start();
     if (!p.waitForStarted(5000)) {
         emit log("Error: Cannot start 7za: " + p.errorString());
         return false;
     }
+    QByteArray key = extraKey();
+    p.write(key);
+    p.write("\n");
+    p.closeWriteChannel();
+    key.fill('\0');
 
     if (!p.waitForFinished(120000)) {
         p.kill();
