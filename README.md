@@ -60,6 +60,13 @@
 и программа открывает её в файловом менеджере. Значок **«?»** рядом с кнопкой показывает подсказку. Чтобы выйти из этого
 режима, безопасно извлеките карту средствами системы.
 
+Переключатель **1 / 2** рядом с кнопкой выбирает карту: **1** — основная SD-карта с ядрами ПЛИС, **2** — дополнительная
+карта для прочих файлов. Обновление ядер всегда работает с картой №1, независимо от положения переключателя.
+
+Если плата уже находится в режиме кард-ридера, повторное нажатие **Open SD card >** не отправляет команду ещё раз:
+программа видит смонтированный диск Карабаса и подсказывает, как выйти из режима. Диск определяется по содержимому
+(ядра `.kg1`/`.kg2`/`.kg3` в корне или папка `backup_*`), поэтому случайно вставленная флешка не будет принята за плату.
+
 ## Что происходит внутри
 
 **Обновление прошивки.** Программа отправляет на порт платы специальный сигнал (соединение на скорости 1200 бод), после которого RP2040
@@ -102,6 +109,11 @@
   (в Arch и Manjaro `uucp`) и перезайдите в систему.
 - **Не находится SD-карта или диск `RPI-RP2`.** Подождите несколько секунд и повторите. Отключите лишние флешки и карты
   и убедитесь, что система вообще показывает диск платы.
+- **Windows: порт платы остался в списке после перехода в режим кард-ридера.** Это нормально: Windows не сразу убирает
+  устройство из списка. Повторное нажатие **Open SD card >** не отправит команду ещё раз — программа увидит смонтированный
+  диск Карабаса и подскажет, как выйти из режима.
+- **После прошивки в журнале нет сообщения об извлечении диска.** Так и должно быть: RP2040 перезагружается сам, и диск
+  `RPI-RP2` исчезает без участия программы.
 - **Скачивание идёт медленно.** Файлы берутся с GitHub; скорость определяется вашим соединением и ничем в программе не регулируется.
 - **Журнал для разбора проблем.** Запустите программу с ключом `--log`: журнал запишется в файл
   (Linux `~/.local/share/KarabasFlasher/flasher_log.txt`, Windows `%APPDATA%\KarabasFlasher\flasher_log.txt`,
@@ -172,11 +184,23 @@ up to two seconds for a reply. The reply has the form `+KARABAS:<firmware>;<boar
 where `board` is the board identifier: `1` — Karabas Go, `2` — Karabas Go Mini rev A-F, `3` — Karabas Go Mini rev G.
 The reply is written to the log, and the matching model is selected in the list automatically.
 
+On Windows the program raises the DTR/RTS lines explicitly after opening the port: the RP2040 USB-CDC device
+only transmits data when DTR is asserted, as with a terminal. Without this the board does not answer the
+version request.
+
 ### Working with the SD card manually
 
 The **Open SD card >** button switches the board into USB card reader mode: the SD card appears in the system
 as a regular drive, and the program opens it in the file manager. The **"?"** icon next to the button shows a hint.
 To leave this mode, safely eject the card using your system's tools.
+
+The **1 / 2** switch next to the button selects the card: **1** — the main SD card with FPGA cores, **2** — an
+additional card for other files. Core updates always use card 1, regardless of the switch position.
+
+If the board is already in card reader mode, pressing **Open SD card >** again does not send the command a second
+time: the program sees the mounted Karabas drive and tells you how to leave the mode. The drive is identified by
+its contents (`.kg1`/`.kg2`/`.kg3` cores in the root or a `backup_*` folder), so a flash drive inserted by accident
+is not mistaken for the board.
 
 ### What happens under the hood
 
@@ -220,6 +244,11 @@ Package details: [docs/DEPENDENCIES_linux.txt](docs/DEPENDENCIES_linux.txt).
   group (in Arch and Manjaro `uucp`) and log in again.
 - **The SD card or `RPI-RP2` drive is not found.** Wait a few seconds and try again. Disconnect extra flash drives and cards
   and make sure the system shows the board's drive at all.
+- **Windows: the board's port stays in the list after switching to card reader mode.** This is normal: Windows does not
+  remove the device from the list immediately. Pressing **Open SD card >** again will not send the command a second time —
+  the program sees the mounted Karabas drive and tells you how to leave the mode.
+- **There is no "drive ejected" message after flashing.** That is expected: the RP2040 reboots by itself and the
+  `RPI-RP2` drive disappears without the program's help.
 - **Download is slow.** Files come from GitHub; the speed is determined by your connection and is not regulated by the program.
 - **Log for troubleshooting.** Run the program with the `--log` switch: the log will be written to a file
   (Linux `~/.local/share/KarabasFlasher/flasher_log.txt`, Windows `%APPDATA%\KarabasFlasher\flasher_log.txt`,
