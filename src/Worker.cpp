@@ -137,20 +137,21 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
     QProcess p;
     p.setProcessEnvironment(cleanChildEnvironment());
     p.setProgram(za);
-    // -p без значения: 7za читает пароль из stdin (не виден в списке процессов).
+    // Пароль передаётся аргументом -p<password>: на Windows 7za при "-p" без значения
+    // читает пароль с консоли (ReadConsole), а не из stdin, и распаковка падает
+    // с "Can not open the file as archive". Аргумент виден в списке процессов,
+    // но это локальная утилита, запускаемая на короткое время.
+    QByteArray key = extraKey();
     p.setArguments(QStringList() << QStringLiteral("x") << archivePath
                                  << QStringLiteral("-o") + outDir
-                                 << QStringLiteral("-y") << QStringLiteral("-p"));
+                                 << QStringLiteral("-y")
+                                 << QStringLiteral("-p") + QString::fromLatin1(key));
+    key.fill('\0');
     p.start();
     if (!p.waitForStarted(5000)) {
         emit log("Error: Cannot start 7za: " + p.errorString());
         return false;
     }
-    QByteArray key = extraKey();
-    p.write(key);
-    p.write("\n");
-    p.closeWriteChannel();
-    key.fill('\0');
 
     if (!p.waitForFinished(120000)) {
         p.kill();
@@ -160,7 +161,10 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
     }
     if (p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0) {
         const QString err = QString::fromUtf8(p.readAllStandardError()).trimmed();
-        emit log("Error: 7za failed (code " + QString::number(p.exitCode()) + "): " + err);
+        const QString out = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
+        QString detail = err;
+        if (!out.isEmpty()) detail += (detail.isEmpty() ? QString() : QStringLiteral(" | ")) + out;
+        emit log("Error: 7za failed (code " + QString::number(p.exitCode()) + "): " + detail);
         return false;
     }
     // Проверяем, что распаковка дала хоть какие-то файлы (пустой архив или неверный пароль
