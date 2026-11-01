@@ -183,10 +183,24 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot) {
     int copied = 0;
     int failed = 0;
 
-    QDirIterator it(srcDir, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    // Если в архиве всё лежит под единственным верхним каталогом "extra/",
+    // срезаем его: содержимое должно попадать в корень SD-карты, а не в <SD>/extra/.
+    QString baseDir = srcDir;
+    {
+        const QFileInfoList top = QDir(srcDir).entryInfoList(
+            QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
+        if (top.size() == 1 && top.first().isDir() &&
+            top.first().fileName().compare(QStringLiteral("extra"), Qt::CaseInsensitive) == 0) {
+            baseDir = top.first().absoluteFilePath();
+            emit log(QStringLiteral("Extra archive has a top-level 'extra' folder; its contents will be "
+                                    "copied to the SD card root."));
+        }
+    }
+
+    QDirIterator it(baseDir, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString src = it.next();
-        const QString rel = QDir(srcDir).relativeFilePath(src);
+        const QString rel = QDir(baseDir).relativeFilePath(src);
         const QString dst = QDir::cleanPath(sdRoot + QLatin1Char('/') + rel);
         const QString dstDir = QFileInfo(dst).absolutePath();
         if (!QDir().mkpath(dstDir)) {
