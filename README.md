@@ -19,6 +19,7 @@
 - **Обновляет прошивку** платы (микроконтроллер RP2040).
 - **Заменяет ядра** (файлы `.kg1`, `.kg2`, `.kg3`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
 - **Открывает SD-карту платы** как обычный диск, чтобы вы могли работать с её файлами напрямую.
+- **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.7z` на SD-карту.
 
 Прошивку и ядра можно обновлять вместе или по отдельности: например, только ядра.
 
@@ -35,9 +36,10 @@
    спросит у платы версию (`AT+KARABAS=version`) и выберет нужную модель.
 3. Отметьте, что нужно обновить:
    - **Update firmware**: прошивка платы (включено по умолчанию);
-   - **Update cores**: ядра на SD-карте.
+   - **Update cores**: ядра на SD-карте;
+   - **Download extra content**: дополнительный контент (ROM-ы, образы дисков и т.п.).
 
-   Можно отметить обе галки или только одну.
+   Можно отметить любые галки в любом сочетании.
 4. Нажмите **Download via GitHub**. Программа скачает всё отмеченное. Ядер много, и скорость зависит от вашего интернета;
    ход загрузки виден в журнале внизу окна.
 5. В списке **Serial port** выберите порт платы. В списке показываются только USB-устройства; нужный порт появляется,
@@ -145,6 +147,7 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 ### What the program does
 
 - **Downloads** the latest firmware and cores from the board author's GitHub repositories.
+- **Copies extra content** (ROMs, disk images, etc.) from the `extra.7z` archive to the SD card.
 - **Updates the board firmware** (RP2040 microcontroller).
 - **Replaces cores** (`.kg1`, `.kg2`, `.kg3` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
 - **Opens the board's SD card** as a regular drive so you can work with its files directly.
@@ -164,9 +167,10 @@ Firmware and cores can be updated together or separately — for example, cores 
    query the board version (`AT+KARABAS=version`) and pick the right model automatically.
 3. Check what you want to update:
    - **Update firmware**: board firmware (enabled by default);
-   - **Update cores**: cores on the SD card.
+   - **Update cores**: cores on the SD card;
+   - **Download extra content**: extra content (ROMs, disk images, etc.).
 
-   You can check both or just one.
+   You can check any combination of these.
 4. Click **Download via GitHub**. The program downloads everything that is checked. There are many cores, and the speed
    depends on your internet connection; progress is shown in the log at the bottom of the window.
 5. In the **Serial port** list, select the board's port. Only USB devices are shown; the required port appears
