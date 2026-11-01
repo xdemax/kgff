@@ -240,20 +240,6 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot) {
             copyOne(fi.absoluteFilePath(), fi.fileName());
         }
     }
-        const QString dstDir = QFileInfo(dst).absolutePath();
-        if (!QDir().mkpath(dstDir)) {
-            emit log("Warning: Cannot create folder " + dstDir);
-            ++failed;
-            continue;
-        }
-        QString e;
-        if (!copyFileSynced(src, dst, &e)) {
-            emit log("Warning: Failed to copy " + rel + ": " + e);
-            ++failed;
-            continue;
-        }
-        ++copied;
-    }
     emit log("Extra content copied: " + QString::number(copied) + " files" +
              (failed > 0 ? ", " + QString::number(failed) + " failed" : QString()) + ".");
     return failed == 0;
