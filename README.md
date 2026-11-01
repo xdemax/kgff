@@ -19,7 +19,7 @@
 - **Обновляет прошивку** платы (микроконтроллер RP2040).
 - **Заменяет ядра** (файлы `.kg1`, `.kg2`, `.kg3`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
 - **Открывает SD-карту платы** как обычный диск, чтобы вы могли работать с её файлами напрямую.
-- **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.7z` на SD-карту. Файлы, которые уже есть на карте, перед заменой переносятся в папку `backup_*`.
+- **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.7z` на SD-карту. Файлы, которые уже есть на карте, перед заменой переносятся в папку `backup_*`. Перед копированием проверяется свободное место, а перед распаковкой — распакованный размер архива (лимит 2 ГБ). Симлинки из архива не копируются.
 
 Прошивку и ядра можно обновлять вместе или по отдельности: например, только ядра.
 
@@ -81,9 +81,13 @@
 на месте. После этого карта безопасно извлекается из системы, и плата возвращается в обычный режим. Если на каком-то шаге что-то
 идёт не так, изменения откатываются: старые ядра возвращаются на место.
 
-**Проверки.** Перед записью программа проверяет, что файл прошивки действительно является образом UF2, что скачан полный набор ядер
-и что найден именно диск платы, а не другая флешка. Если к компьютеру подключено несколько подходящих дисков, программа остановится
-и попросит оставить только плату.
+**Проверки.** Перед записью программа проверяет, что файл прошивки действительно является образом UF2 (включая family ID RP2040,
+номера блоков и размеры полезной нагрузки во всех блоках), что скачан полный набор ядер и что найден именно диск платы, а не другая
+флешка. Если к компьютеру подключено несколько подходящих дисков, программа остановится и попросит оставить только плату.
+
+**Ошибки порта.** Если порт не открылся или запись в него не удалась (нет прав, порт занят другой программой), программа
+сообщает об этом сразу и не ждёт появления диска. Если порт реально исчез (например, отключили кабель) и диск `RPI-RP2`
+уже виден, прошивка продолжается без 1200-бод-сброса — но только в ветке без MSC-сеанса, где имя порта не могло измениться.
 
 ## Установка
 
@@ -147,7 +151,7 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 ### What the program does
 
 - **Downloads** the latest firmware and cores from the board author's GitHub repositories.
-- **Copies extra content** (ROMs, disk images, etc.) from the `extra.7z` archive to the SD card. Files that already exist on the card are moved to a `backup_*` folder before being replaced.
+- **Copies extra content** (ROMs, disk images, etc.) from the `extra.7z` archive to the SD card. Files that already exist on the card are moved to a `backup_*` folder before being replaced. Free space is checked before copying, and the unpacked archive size is checked before extraction (2 GB limit). Symbolic links from the archive are not copied.
 - **Updates the board firmware** (RP2040 microcontroller).
 - **Replaces cores** (`.kg1`, `.kg2`, `.kg3` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
 - **Opens the board's SD card** as a regular drive so you can work with its files directly.
@@ -218,9 +222,15 @@ Only release cores (those that are part of the GitHub set) are moved to the back
 the card manually are left in place. After that, the card is safely ejected from the system, and the board returns to
 normal mode. If something goes wrong at any step, the changes are rolled back: the old cores are restored.
 
-**Checks.** Before writing, the program verifies that the firmware file is really a UF2 image, that a complete set of
-cores has been downloaded, and that the drive found is the board's drive and not another flash drive. If several
-suitable drives are connected to the computer, the program stops and asks you to leave only the board.
+**Checks.** Before writing, the program verifies that the firmware file is really a UF2 image (including the RP2040
+family ID, block numbers and payload sizes in every block), that a complete set of cores has been downloaded, and that
+the drive found is the board's drive and not another flash drive. If several suitable drives are connected to the
+computer, the program stops and asks you to leave only the board.
+
+**Port errors.** If the port could not be opened or written to (no permission, port busy), the program reports it
+immediately and does not wait for a drive to appear. If the port has really disappeared (e.g. the cable was unplugged)
+and the `RPI-RP2` drive is already visible, flashing continues without the 1200 bps reset — but only in the branch
+without an MSC session, where the port name could not have changed.
 
 ### Installation
 
