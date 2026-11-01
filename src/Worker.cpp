@@ -296,6 +296,9 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot, const Q
             fi.fileName().compare(QStringLiteral("extra"), Qt::CaseInsensitive) == 0) {
             continue;
         }
+        // Симлинк на папку не раскрываем: иначе оценка размера пойдёт по цели ссылки
+        // и может дать ложное "мало места". Такие ссылки всё равно не копируются.
+        if (fi.isSymLink()) continue;
         if (fi.isDir()) addSize(fi.absoluteFilePath());
         else needed += fi.size();
     }
@@ -1283,6 +1286,19 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
                 // Сбой копирования extra - это ошибка, а не предупреждение: иначе итог
                 // будет "completed successfully", хотя карта неполная.
                 emit log(QStringLiteral("Error: Extra content was not fully copied. Aborting before flashing."));
+                // Служебные файлы ОС (macOS: "._*") удаляем ДО извлечения карты, иначе
+                // они останутся на карте (например, "._alf.kg3").
+                {
+                    QStringList extraDirs;
+                    if (QFileInfo(backupDir).isDir()) extraDirs << backupDir;
+                    const int cleaned = Platform::cleanupVolumeJunk(root, extraDirs);
+                    if (cleaned > 0) {
+                        emit log("Removed " + QString::number(cleaned) + " system service files from the SD card.");
+                    }
+                }
+                emit log(QStringLiteral("The cores have already been updated on the SD card, but the firmware "
+                                        "was not flashed. Replug the Karabas, then press FLASH again with only "
+                                        "'Update firmware' checked to finish flashing the firmware."));
                 ejectBestEffort(sd);
                 return false;
             }
