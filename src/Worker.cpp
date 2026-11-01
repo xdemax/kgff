@@ -1470,21 +1470,24 @@ void Worker::doFlash(const Params& p) {
         // Сначала пробуем сброс: если порт Карабаса живой, он всегда должен сработать.
         // Проверка bootloaderDisks() до сброса опасна: если рядом в BOOTSEL лежит другая
         // RP2040-плата (Pico и т.п.), сброс будет пропущен, и прошивка уйдёт на чужую плату.
-        // Продолжаем без сброса только если порт РЕАЛЬНО отсутствует в системе (устаревший
-        // выбор) и нет отказа в правах. Если порт есть, но не открылся (занят, нет прав) -
-        // прерываемся: иначе можно прошить чужую плату в BOOTSEL.
+        // В ветке с MSC-сеансом имя порта могло измениться, поэтому продолжать без сброса
+        // нельзя: рядом в BOOTSEL может оказаться чужая плата. Прерываемся с подсказкой.
         if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
             const bool portGone = !m_permissionDenied && !isPortPresent(p.portLocation);
             if (portGone && !Platform::bootloaderDisks().isEmpty()) {
-                emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
-                                        "is already available; continuing without the 1200 bps reset."));
+                emit log(QStringLiteral("Error: The serial port is no longer present, but an RPI-RP2 bootloader "
+                                        "drive is available. It may belong to another board (the port name can "
+                                        "change after the MSC session). Replug the Karabas and press FLASH again "
+                                        "with only 'Update firmware' checked."));
             } else {
                 emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                         "Aborting before flashing."));
-                return;
             }
+            return;
         }
     } else if (!p.portLocation.isEmpty()) {
+        // Ветка без MSC-сеанса: имя порта не менялось, поэтому если порт реально исчез
+        // (отключили кабель) и RPI-RP2 уже виден, продолжаем без сброса.
         if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
             const bool portGone = !m_permissionDenied && !isPortPresent(p.portLocation);
             if (portGone && !Platform::bootloaderDisks().isEmpty()) {
