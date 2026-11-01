@@ -96,14 +96,14 @@ private:
     bool waitForMountedVolume(const std::function<QList<Platform::Candidate>()>& finder,
                               int timeoutMs, Platform::Candidate* out);
     bool updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
-                         const QStringList& newCores);
+                         const QStringList& newCores, bool updateExtra);
     void rollbackCores(const QStringList& copiedNew, const QList<QPair<QString, QString>>& movedOld);
     bool ejectBestEffort(const Platform::Candidate& sd);
 
     // Extra content: скачивание extra.7z, распаковка через 7za, копирование на SD.
     bool downloadExtraArchive(const QString& destPath);
     bool extractExtraArchive(const QString& archivePath, const QString& outDir);
-    bool copyExtraToSd(const QString& srcDir, const QString& sdRoot);
+    bool copyExtraToSd(const QString& srcDir, const QString& sdRoot, const QString& backupDir);
     QString sevenZaPath() const;
     QByteArray extraKey() const;
 
