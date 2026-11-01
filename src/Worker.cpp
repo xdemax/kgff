@@ -663,6 +663,9 @@ void Worker::doDownload(const Params& p) {
             emit log("Error: Cannot create folder for extra content: " + extraDir);
             return;
         }
+        // Удаляем старый маркер ДО скачивания: если новая распаковка упадёт посередине,
+        // FLASH не должен принять частично распакованный архив за готовый набор.
+        QFile::remove(extraDir + "/" + kExtraCompleteMarker);
         const QString archive = extraDir + QStringLiteral("/extra.7z");
         const QString filesDir = extraDir + QStringLiteral("/files");
         if (!downloadExtraArchive(archive)) return;
@@ -853,8 +856,18 @@ bool Worker::sendMscCommand(const QString& portLocation, int mscMode) {
 
     QByteArray resp;
     if (!sendAtCommand(portLocation, cmd, &resp, 1000)) {
-        // Пустой ответ — не ошибка: устройство могло уже перезагрузиться в MSC.
-        // Ошибку открытия/записи sendAtCommand уже залогировал.
+        // sendAtCommand возвращает false в трёх случаях:
+        //   1) порт не открылся (нет прав, занят) - это ошибка, ждать диск бессмысленно;
+        //   2) запись не удалась - тоже ошибка;
+        //   3) ответа нет - это нормально: устройство могло уже перезагрузиться в MSC.
+        // Отличить (1)/(2) от (3) можно по флагу m_permissionDenied и по тому, был ли
+        // вообще открыт порт. sendAtCommand уже залогировал причину, поэтому здесь
+        // достаточно проверить m_permissionDenied и пустой ответ.
+        if (m_permissionDenied) {
+            emit log(QStringLiteral("Error: No permission to open the serial port. The MSC command was not sent."));
+            return false;
+        }
+        // Пустой ответ без ошибки доступа - устройство уже перезагрузилось в MSC.
         return true;
     }
     const QString text = QString::fromUtf8(resp).trimmed();
@@ -1071,11 +1084,14 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
     // 1) Бэкап старых ядер. Переносим только те файлы, которые входят в релизный набор
     // (совпадают по имени с newCores); пользовательские/тестовые ядра не трогаем.
     emit log("Moving existing release cores (" + m.ext + ") from SD root to backup folder...");
+    // FAT регистронезависима: "ALF.KG3" на карте и "alf.kg3" в релизе - один и тот же файл.
+    // Сравниваем имена в нижнем регистре, иначе старый файл не попадёт в бэкап и будет
+    // перезаписан без возможности отката.
     QSet<QString> releaseNames;
-    for (const QString& src : newCores) releaseNames.insert(QFileInfo(src).fileName());
+    for (const QString& src : newCores) releaseNames.insert(QFileInfo(src).fileName().toLower());
     QStringList oldCores;
     for (const QString& f : listFilesWithExt(root, m.ext)) {
-        if (releaseNames.contains(QFileInfo(f).fileName())) oldCores << f;
+        if (releaseNames.contains(QFileInfo(f).fileName().toLower())) oldCores << f;
     }
     QList<QPair<QString, QString>> movedOld;
     bool moveFailed = false;

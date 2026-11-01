@@ -354,31 +354,9 @@ void MainWindow::onMsc() {
     if (m_busy) return;
     const Params p = collectParams();
 
-    // Если смонтирован диск с меткой Карабаса - устройство уже в MSC-режиме.
-    // Повторная команда MSC бессмысленна (и на Windows порт может ещё висеть
-    // в списке, поэтому проверки "порт пуст" недостаточно). Проверяем ВСЕ
-    // смонтированные USB-диски, а не только новые: диск Карабаса уже был в снимке.
-    QStringList where;
-    for (const Platform::Candidate& c : Platform::newDisks(QSet<QString>())) {
-        if (!isKarabasVolume(c.mountPoint)) continue;
-        where << (c.mountPoint.isEmpty() ? c.node : c.mountPoint) +
-                     (c.label.isEmpty() ? QString() : " [" + c.label + "]");
-    }
-    if (!where.isEmpty()) {
-        appendLog(QStringLiteral("Warning: The device is already in MSC mode (drive %1 is mounted). "
-                                 "To leave it, safely eject the SD card drive from your system "
-                                 "(or unplug the USB cable).").arg(where.join(", ")));
-        return;
-    }
-
-    if (p.portLocation.isEmpty()) {
-        // Порта нет: скорее всего, устройство уже в MSC-режиме (или не подключено).
-        // Команду MSC посылать некуда - подсказываем, как выйти из режима.
-        appendLog(QStringLiteral("Warning: No serial port selected. The device may already be in MSC mode "
-                                 "(the serial port disappears in this mode). To leave it, safely eject the "
-                                 "SD card drive from your system (or unplug the USB cable)."));
-        return;
-    }
+    // Проверка "уже в MSC" и подсказка про пустой порт живут в Worker::doOpenSd:
+    // там они выполняются в рабочем потоке и не блокируют GUI (на macOS Platform::newDisks
+    // вызывает diskutil на каждый том, до 10 с на том).
     setBusy(true);
     m_worker->clearCancel();        // сброс в GUI-потоке до постановки задачи в очередь
     QMetaObject::invokeMethod(m_worker, [w = m_worker, p]() { w->runMsc(p); }, Qt::QueuedConnection);

@@ -1,5 +1,4 @@
 // macOS: тома монтируются системой в /Volumes. Свойства тома берутся из `diskutil info -plist`.
-// Не проверено на реальном Mac.
 #include "Platform.h"
 
 #include <QDir>

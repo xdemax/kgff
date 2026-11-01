@@ -28,7 +28,12 @@ bool isSafeFileName(const QString& n) {
 }
 
 QString workDir() {
-    return QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/work");
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    // Если CacheLocation пуст (например, HOME не задан), путь стал бы "/work",
+    // а cleanupTemp() вызывает removeRecursively() - это опасно. Возвращаем пустую
+    // строку, а вызывающий код должен отказаться от работы с рабочей папкой.
+    if (base.isEmpty()) return QString();
+    return base + QStringLiteral("/work");
 }
 
 QStringList listFilesWithExt(const QString& dir, const QString& ext) {
@@ -43,6 +48,10 @@ QStringList listFilesWithExt(const QString& dir, const QString& ext) {
 
 QProcessEnvironment cleanChildEnvironment() {
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    // Системные утилиты (udisksctl, diskutil, 7za) парсятся по тексту сообщений.
+    // Принудительно ставим C-локаль, чтобы сообщения не переводились и не ломали разбор.
+    env.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
+    env.insert(QStringLiteral("LANG"), QStringLiteral("C"));
     const QString appdir = env.value(QStringLiteral("APPDIR"));
     if (!appdir.isEmpty()) {
         QStringList keep;
