@@ -128,6 +128,17 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
         emit log("Error: 7za binary not found at " + za + ". Reinstall the application.");
         return false;
     }
+#if !defined(Q_OS_WIN)
+    // Страховка: если бит исполнения потерялся при копировании (CMake COPYONLY,
+    // распаковка zip без прав), 7za не запустится ("execve: Permission denied").
+    {
+        const QFileInfo fi(za);
+        if (!fi.isExecutable()) {
+            QFile::setPermissions(za, fi.permissions() | QFileDevice::ExeOwner |
+                                           QFileDevice::ExeGroup | QFileDevice::ExeOther);
+        }
+    }
+#endif
     QDir(outDir).removeRecursively();
     if (!QDir().mkpath(outDir)) {
         emit log("Error: Cannot create folder for extra content: " + outDir);
