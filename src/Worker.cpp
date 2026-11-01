@@ -1311,13 +1311,19 @@ void Worker::doFlash(const Params& p) {
             emit log("Warning: Chosen port " + p.portLocation +
                      " not detected automatically (the device name may have changed). Trying to open directly.");
         }
-        if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
+        // Если диск RPI-RP2 уже виден, плата уже в режиме загрузчика: сброс не нужен,
+        // и ошибка открытия устаревшего порта не должна прерывать прошивку.
+        if (!Platform::bootloaderDisks().isEmpty()) {
+            emit log(QStringLiteral("The RPI-RP2 bootloader drive is already present; skipping the 1200 bps reset."));
+        } else if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
             emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                     "Aborting before flashing."));
             return;
         }
     } else if (!p.portLocation.isEmpty()) {
-        if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
+        if (!Platform::bootloaderDisks().isEmpty()) {
+            emit log(QStringLiteral("The RPI-RP2 bootloader drive is already present; skipping the 1200 bps reset."));
+        } else if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
             emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                     "Aborting before flashing."));
             return;
