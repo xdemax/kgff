@@ -149,7 +149,8 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
             list.exitStatus() == QProcess::NormalExit && list.exitCode() == 0) {
             const QString text = QString::fromUtf8(list.readAllStandardOutput());
             qint64 total = 0;
-            static const QRegularExpression sizeRe(QStringLiteral("^Size = (\\d+)$"),
+            // \s*$ - на Windows 7za печатает CRLF, и без \s* строка "Size = N\r" не совпадёт.
+            static const QRegularExpression sizeRe(QStringLiteral("^Size = (\\d+)\\s*$"),
                                                    QRegularExpression::MultilineOption);
             QRegularExpressionMatchIterator it = sizeRe.globalMatch(text);
             while (it.hasNext()) total += it.next().captured(1).toLongLong();
@@ -160,6 +161,13 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
                          " MB limit. Aborting extraction.");
                 return false;
             }
+            if (total == 0) {
+                emit log(QStringLiteral("Warning: Could not determine the unpacked size of the extra archive; "
+                                        "skipping the size check."));
+            }
+        } else {
+            emit log(QStringLiteral("Warning: Could not list the extra archive to check its unpacked size; "
+                                    "skipping the size check."));
         }
     }
 
@@ -217,7 +225,10 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot, const Q
     // Если в архиве есть верхний каталог "extra/", его содержимое копируется в корень
     // SD-карты (без вложенной папки extra). Остальные элементы корня копируются как есть.
     const QString extraSubdir = srcDir + QStringLiteral("/extra");
-    const bool hasExtraSubdir = QFileInfo(extraSubdir).isDir();
+    // Симлинк на папку не считаем папкой: иначе итератор пойдёт по его цели
+    // и вытащит произвольный локальный каталог (актуально для недоверенного архива).
+    const QFileInfo extraSubdirInfo(extraSubdir);
+    const bool hasExtraSubdir = extraSubdirInfo.isDir() && !extraSubdirInfo.isSymLink();
     if (hasExtraSubdir) {
         emit log(QStringLiteral("Extra archive has a top-level 'extra' folder; its contents will be "
                                 "copied to the SD card root."));
@@ -239,11 +250,18 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot, const Q
         if (QFile::exists(dst) && !backupDir.isEmpty()) {
             const QString bak = QDir::cleanPath(backupDir + QLatin1Char('/') + rel);
             if (!QDir().mkpath(QFileInfo(bak).absolutePath())) {
-                emit log("Warning: Cannot create backup folder for " + rel);
+                emit log("Warning: Cannot create backup folder for " + rel + "; skipping this file.");
+                ++failed;
+                return false;
             } else if (QFile::exists(bak)) {
                 emit log("Warning: Backup already exists for " + rel + "; keeping the original backup.");
             } else if (QFile::rename(dst, bak)) {
                 ++backedUp;
+            } else {
+                // Без бэкапа перезаписывать нельзя: пользователь потеряет старую версию.
+                emit log("Warning: Failed to back up " + rel + "; skipping this file.");
+                ++failed;
+                return false;
             }
         }
         QString e;
@@ -310,6 +328,12 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot, const Q
             fi.fileName().compare(QStringLiteral("extra"), Qt::CaseInsensitive) == 0) {
             continue;       // уже обработано выше
         }
+        // Симлинк на папку не раскрываем: isSymLink() проверяется ДО isDir(),
+        // иначе итератор пойдёт по цели ссылки.
+        if (fi.isSymLink()) {
+            emit log("Warning: Skipping symbolic link in extra archive: " + fi.fileName());
+            continue;
+        }
         if (fi.isDir()) {
             QDirIterator it(fi.absoluteFilePath(), QDir::Files | QDir::NoSymLinks | QDir::NoDotAndDotDot,
                             QDirIterator::Subdirectories);
@@ -318,7 +342,7 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot, const Q
                 const QString rel = QDir(srcDir).relativeFilePath(src);
                 copyOne(src, rel);
             }
-        } else if (!fi.isSymLink()) {
+        } else {
             copyOne(fi.absoluteFilePath(), fi.fileName());
         }
     }
@@ -1256,7 +1280,11 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
         if (QFile::exists(workDir() + QStringLiteral("/extra/") + kExtraCompleteMarker) &&
             QFileInfo(extraFilesDir).isDir()) {
             if (!copyExtraToSd(extraFilesDir, root, backupDir)) {
-                emit log(QStringLiteral("Warning: Some extra content files could not be copied."));
+                // Сбой копирования extra - это ошибка, а не предупреждение: иначе итог
+                // будет "completed successfully", хотя карта неполная.
+                emit log(QStringLiteral("Error: Extra content was not fully copied. Aborting before flashing."));
+                ejectBestEffort(sd);
+                return false;
             }
         }
     }
