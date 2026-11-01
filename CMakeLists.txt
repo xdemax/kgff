@@ -85,18 +85,27 @@ qt_add_executable(KarabasFlasher WIN32 MACOSX_BUNDLE
 target_include_directories(KarabasFlasher PRIVATE ${CMAKE_BINARY_DIR}/generated)
 
 # 7za кладётся рядом с исполняемым файлом (и внутрь .app на macOS).
-# Права +x уже выставлены через file(CHMOD) при конфигурации, а copy_if_different
-# их сохраняет (в отличие от configure_file COPYONLY). Отдельный chmod не нужен:
-# команды "cmake -E chmod" не существует.
+# copy_if_different права не сохраняет, поэтому после копирования выставляем +x
+# через cmake -P (команды "cmake -E chmod" не существует).
 add_custom_command(TARGET KarabasFlasher POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_BINARY_DIR}/7za_bin/${SEVENZA_NAME}"
         "$<TARGET_FILE_DIR:KarabasFlasher>/${SEVENZA_NAME}")
+if(NOT WIN32)
+    add_custom_command(TARGET KarabasFlasher POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DFILE=$<TARGET_FILE_DIR:KarabasFlasher>/${SEVENZA_NAME}
+            -P "${CMAKE_SOURCE_DIR}/cmake/chmod_7za.cmake")
+endif()
 if(APPLE)
     add_custom_command(TARGET KarabasFlasher POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_BINARY_DIR}/7za_bin/${SEVENZA_NAME}"
             "$<TARGET_BUNDLE_CONTENT_DIR:KarabasFlasher>/MacOS/${SEVENZA_NAME}")
+    add_custom_command(TARGET KarabasFlasher POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DFILE=$<TARGET_BUNDLE_CONTENT_DIR:KarabasFlasher>/MacOS/${SEVENZA_NAME}
+            -P "${CMAKE_SOURCE_DIR}/cmake/chmod_7za.cmake")
 endif()
 
 target_link_libraries(KarabasFlasher PRIVATE

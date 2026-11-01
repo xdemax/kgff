@@ -761,18 +761,25 @@ void Worker::doDownload(const Params& p) {
         const QString extraDir = wd + QStringLiteral("/extra");
         if (!QDir().mkpath(extraDir)) {
             emit log("Error: Cannot create folder for extra content: " + extraDir);
-            return;
-        }
-        // Удаляем старый маркер ДО скачивания: если новая распаковка упадёт посередине,
-        // FLASH не должен принять частично распакованный архив за готовый набор.
-        QFile::remove(extraDir + "/" + kExtraCompleteMarker);
-        const QString archive = extraDir + QStringLiteral("/extra.7z");
-        const QString filesDir = extraDir + QStringLiteral("/files");
-        if (!downloadExtraArchive(archive)) return;
-        if (!extractExtraArchive(archive, filesDir)) return;
-        QFile marker(extraDir + "/" + kExtraCompleteMarker);
-        if (!marker.open(QIODevice::WriteOnly)) {
-            emit log("Warning: Could not create the extra completion marker (" + marker.errorString() + ").");
+            // Не прерываем: прошивка и ядра важнее, extra можно повторить отдельно.
+        } else {
+            // Удаляем старый маркер ДО скачивания: если новая распаковка упадёт посередине,
+            // FLASH не должен принять частично распакованный архив за готовый набор.
+            QFile::remove(extraDir + "/" + kExtraCompleteMarker);
+            const QString archive = extraDir + QStringLiteral("/extra.7z");
+            const QString filesDir = extraDir + QStringLiteral("/files");
+            // Сбой extra не должен прерывать скачивание ядер и прошивку: сообщаем
+            // об ошибке и идём дальше. Итоговая сводка будет в конце.
+            if (!downloadExtraArchive(archive)) {
+                emit log(QStringLiteral("Warning: Extra content download failed; continuing with the rest."));
+            } else if (!extractExtraArchive(archive, filesDir)) {
+                emit log(QStringLiteral("Warning: Extra content extraction failed; continuing with the rest."));
+            } else {
+                QFile marker(extraDir + "/" + kExtraCompleteMarker);
+                if (!marker.open(QIODevice::WriteOnly)) {
+                    emit log("Warning: Could not create the extra completion marker (" + marker.errorString() + ").");
+                }
+            }
         }
     } else {
         emit log(QStringLiteral("Skipping extra content download because 'Download extra content' is unchecked."));
@@ -780,6 +787,13 @@ void Worker::doDownload(const Params& p) {
 
     if (!p.updateCores) {
         emit log(QStringLiteral("Skipping cores download because 'Update cores' is unchecked."));
+        // Итоговая сводка: что скачалось, а что нет.
+        emit log(QStringLiteral("Download summary: firmware=%1, extra=%2, cores=skipped.")
+                    .arg(p.updateFirmware ? QStringLiteral("done") : QStringLiteral("skipped"),
+                         p.updateExtra
+                             ? (QFile::exists(wd + QStringLiteral("/extra/") + kExtraCompleteMarker)
+                                    ? QStringLiteral("done") : QStringLiteral("failed"))
+                             : QStringLiteral("skipped")));
         return;
     }
 
@@ -848,6 +862,17 @@ void Worker::doDownload(const Params& p) {
         emit log(QStringLiteral("Warning: Cores set is incomplete. Flashing with 'Update cores' will be "
                                 "refused until all cores download."));
     }
+
+    // Итоговая сводка: что скачалось, а что нет.
+    emit log(QStringLiteral("Download summary: firmware=%1, extra=%2, cores=%3.")
+                .arg(p.updateFirmware ? QStringLiteral("done") : QStringLiteral("skipped"),
+                     p.updateExtra
+                         ? (QFile::exists(wd + QStringLiteral("/extra/") + kExtraCompleteMarker)
+                                ? QStringLiteral("done") : QStringLiteral("failed"))
+                         : QStringLiteral("skipped"),
+                     okCount == cores.size()
+                         ? QStringLiteral("done")
+                         : QStringLiteral("incomplete (%1/%2)").arg(okCount).arg(cores.size())));
 }
 
 // ----------------------------------------------------------------------------
@@ -1279,26 +1304,9 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
         if (QFile::exists(workDir() + QStringLiteral("/extra/") + kExtraCompleteMarker) &&
             QFileInfo(extraFilesDir).isDir()) {
             if (!copyExtraToSd(extraFilesDir, root)) {
-                // Сбой копирования extra - это ошибка, а не предупреждение: иначе итог
-                // будет "completed successfully", хотя карта неполная.
-                emit log(QStringLiteral("Error: Extra content was not fully copied. Aborting before flashing."));
-                // Служебные файлы ОС (macOS: "._*") удаляем ДО извлечения карты, иначе
-                // они останутся на карте (например, "._alf.kg3").
-                cleanupVolumeJunk(root, backupDir);
-                const bool ejected = ejectBestEffort(sd);
-                if (updateFirmware) {
-                    if (ejected) {
-                        emit log(QStringLiteral("The cores have already been updated on the SD card, but the "
-                                                "firmware was not flashed. Press FLASH again with only "
-                                                "'Update firmware' checked to finish flashing the firmware."));
-                    } else {
-                        emit log(QStringLiteral("The cores have already been updated on the SD card, but the "
-                                                "firmware was not flashed. Replug the Karabas, then press FLASH "
-                                                "again with only 'Update firmware' checked to finish flashing "
-                                                "the firmware."));
-                    }
-                }
-                return false;
+                // Сбой копирования extra не должен прерывать прошивку: ядра уже на карте,
+                // прошивка важнее. Итоговая сводка будет в конце.
+                emit log(QStringLiteral("Warning: Extra content was not fully copied; continuing with the rest."));
             }
         }
     }
@@ -1334,6 +1342,15 @@ void Worker::doFlash(const Params& p) {
                                 "'Download extra content'."));
         return;
     }
+    // Итоговая сводка: собираем статусы по каждой операции, чтобы в конце вывести
+    // "firmware=done, cores=done, extra=failed" вместо одного "completed successfully".
+    QString fwStatus = p.updateFirmware ? QStringLiteral("pending") : QStringLiteral("skipped");
+    QString coresStatus = p.updateCores ? QStringLiteral("pending") : QStringLiteral("skipped");
+    QString extraStatus = p.updateExtra ? QStringLiteral("pending") : QStringLiteral("skipped");
+    auto printSummary = [&]() {
+        emit log(QStringLiteral("Flash summary: firmware=%1, cores=%2, extra=%3.")
+                    .arg(fwStatus, coresStatus, extraStatus));
+    };
     if (p.updateFirmware) {
         if (p.firmwarePath.isEmpty()) {
             emit log(QStringLiteral("Error: Firmware file not selected."));
@@ -1377,16 +1394,28 @@ void Worker::doFlash(const Params& p) {
         }
         if (p.updateExtra) {
             if (!QFile::exists(extraDir + "/" + kExtraCompleteMarker) || !QFileInfo(extraFilesDir).isDir()) {
-                emit log(QStringLiteral("Error: No downloaded extra content found. Check 'Download extra content' "
-                                        "and press 'Download via GitHub' first."));
-                return;
+                // Не прерываем: прошивка и ядра важнее. Extra будет отмечен как failed в сводке.
+                emit log(QStringLiteral("Warning: No downloaded extra content found. Extra content will be "
+                                        "skipped; check 'Download extra content' and press 'Download via GitHub' "
+                                        "to fetch it."));
+                extraStatus = QStringLiteral("failed (not downloaded)");
             }
         }
 
         // Один MSC-сеанс: сначала ядра, затем extra (обе операции на карте №1).
         if (p.updateCores) {
             const ModelInfo& m = models().at(p.modelIndex);
-            if (!updateCoresOnSd(m, p.portLocation, newCores, p.updateExtra, p.updateFirmware)) return;
+            if (!updateCoresOnSd(m, p.portLocation, newCores, p.updateExtra, p.updateFirmware)) {
+                coresStatus = QStringLiteral("failed");
+                if (p.updateExtra) extraStatus = QStringLiteral("failed");
+                printSummary();
+                return;
+            }
+            coresStatus = QStringLiteral("done");
+            if (p.updateExtra) {
+                extraStatus = QFile::exists(workDir() + QStringLiteral("/extra/") + kExtraCompleteMarker)
+                                  ? QStringLiteral("done") : QStringLiteral("failed");
+            }
         } else {
             // Только extra: открываем MSC и копируем.
             emit log(QStringLiteral("Switching Karabas to SD Card MSC mode (card 1) for extra content..."));
@@ -1408,6 +1437,7 @@ void Worker::doFlash(const Params& p) {
             }
             emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
             const bool extraOk = copyExtraToSd(extraFilesDir, sd.mountPoint);
+            extraStatus = extraOk ? QStringLiteral("done") : QStringLiteral("failed");
 
             // Служебные файлы ОС (macOS: "._*") удаляем ДО извлечения карты
             cleanupVolumeJunk(sd.mountPoint, QString());
@@ -1415,10 +1445,7 @@ void Worker::doFlash(const Params& p) {
             emit log(QStringLiteral("Ejecting SD Card drive from system..."));
             if (!ejectBestEffort(sd)) {
                 emit log(QStringLiteral("Error: The SD card could not be ejected. Replug the Karabas."));
-                return;
-            }
-            if (!extraOk) {
-                emit log(QStringLiteral("Error: Extra content was not fully copied. See the warnings above."));
+                printSummary();
                 return;
             }
         }
@@ -1439,6 +1466,7 @@ void Worker::doFlash(const Params& p) {
                 emit log(QStringLiteral("Warning: The operation is complete, but the device port was not detected again. "
                                         "Replug the device if it does not respond."));
             }
+            printSummary();
             return;
         }
         if (portFound) {
@@ -1505,19 +1533,23 @@ void Worker::doFlash(const Params& p) {
 
     QString err;
     if (copyFileSynced(p.firmwarePath, target, &err)) {
+        fwStatus = QStringLiteral("done");
         emit log(QStringLiteral("Process completed successfully. Device is rebooting with new firmware."));
     } else {
         // RP2040 перезагружается сразу после записи последнего блока - копирование
         // может сообщить об ошибке, хотя прошивка уже принята.
         QThread::msleep(1500);
         if (Platform::bootloaderDisks().isEmpty()) {
+            fwStatus = QStringLiteral("done (copy reported an error, but the device rebooted)");
             emit log("Warning: Copy reported an error (" + err +
                      "), but the bootloader drive has disappeared - the device most likely rebooted with the "
                      "new firmware. Please verify.");
         } else {
+            fwStatus = QStringLiteral("failed");
             emit log("Flash write error: " + err);
         }
     }
+    printSummary();
 
     // Eject после прошивки не нужен: RP2040 перезагружается сам сразу после записи
     // последнего блока, и диск RPI-RP2 исчезает. Попытка eject на уже исчезнувшем
