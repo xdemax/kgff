@@ -85,7 +85,7 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     m_fwChk->setToolTip(tr("Download and flash the RP2040 firmware of the board."));
     m_extraChk = new QCheckBox(tr("Download extra content"));
     m_extraChk->setToolTip(tr("Download the extra content archive and copy its files to the SD card. "
-                              "Files that already exist on the card are moved to a backup_* folder first."));
+                              "Files that already exist on the card are replaced; other files are left untouched."));
     m_coresChk = new QCheckBox(tr("Update cores"));
     m_coresChk->setToolTip(tr("Download the FPGA cores and replace them on the SD card. "
                               "The old cores are saved to a backup folder on the card."));

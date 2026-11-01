@@ -105,7 +105,7 @@ private:
     // Extra content: скачивание extra.7z, распаковка через 7za, копирование на SD.
     bool downloadExtraArchive(const QString& destPath);
     bool extractExtraArchive(const QString& archivePath, const QString& outDir);
-    bool copyExtraToSd(const QString& srcDir, const QString& sdRoot, const QString& backupDir);
+    bool copyExtraToSd(const QString& srcDir, const QString& sdRoot);
     QString sevenZaPath() const;
     QByteArray extraKey() const;
 

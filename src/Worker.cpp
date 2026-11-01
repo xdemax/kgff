@@ -227,11 +227,10 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
     return true;
 }
 
-bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot, const QString& backupDir) {
+bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot) {
     emit log(QStringLiteral("Copying extra content to SD card..."));
     int copied = 0;
     int failed = 0;
-    int backedUp = 0;
 
     // Если в архиве есть верхний каталог "extra/", его содержимое копируется в корень
     // SD-карты (без вложенной папки extra). Остальные элементы корня копируются как есть.
@@ -253,35 +252,13 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot, const Q
             ++failed;
             return false;
         }
-        // Бэкап перезаписываемого файла: сохраняем старую версию в backup_*,
-        // чтобы пользователь мог откатить изменения. Если файла нет - пропускаем.
-        // Существующий бэкап НЕ перезаписываем: в смешанном архиве один и тот же
-        // относительный путь может встретиться дважды (в extra/ и в корне), и второй
-        // проход затёр бы оригинал копией, записанной первым проходом.
-        if (QFile::exists(dst) && !backupDir.isEmpty()) {
-            const QString bak = QDir::cleanPath(backupDir + QLatin1Char('/') + rel);
-            if (!QDir().mkpath(QFileInfo(bak).absolutePath())) {
-                emit log("Warning: Cannot create backup folder for " + rel + "; skipping this file.");
-                ++failed;
-                return false;
-            } else if (QFile::exists(bak)) {
-                emit log("Warning: Backup already exists for " + rel + "; keeping the original backup.");
-            } else if (QFile::rename(dst, bak)) {
-                ++backedUp;
-            } else {
-                // Без бэкапа перезаписывать нельзя: пользователь потеряет старую версию.
-                emit log("Warning: Failed to back up " + rel + "; skipping this file.");
-                ++failed;
-                return false;
-            }
-        }
+        // Файлы extra копируются с заменой существующих. Бэкап не делается:
+        // в папках extra у пользователя могут быть свои файлы, и складывать их
+        // в backup_* рядом с ядрами не нужно. Файлы, которых нет в архиве,
+        // не трогаются вообще.
         QString e;
         if (!copyFileSynced(src, dst, &e)) {
             emit log("Warning: Failed to copy " + rel + ": " + e);
-            if (!backupDir.isEmpty() && QFile::exists(QDir::cleanPath(backupDir + QLatin1Char('/') + rel))) {
-                emit log("Warning: The previous version of " + rel +
-                         " is preserved in the backup folder; the file on the SD card may be missing or truncated.");
-            }
             ++failed;
             return false;
         }
@@ -361,7 +338,6 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot, const Q
         }
     }
     emit log("Extra content copied: " + QString::number(copied) + " files" +
-             (backedUp > 0 ? ", " + QString::number(backedUp) + " backed up" : QString()) +
              (failed > 0 ? ", " + QString::number(failed) + " failed" : QString()) + ".");
     if (failed > 0) {
         emit log("Error: Some extra content files could not be copied. The SD card may be incomplete.");
@@ -1302,7 +1278,7 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
         const QString extraFilesDir = workDir() + QStringLiteral("/extra/files");
         if (QFile::exists(workDir() + QStringLiteral("/extra/") + kExtraCompleteMarker) &&
             QFileInfo(extraFilesDir).isDir()) {
-            if (!copyExtraToSd(extraFilesDir, root, backupDir)) {
+            if (!copyExtraToSd(extraFilesDir, root)) {
                 // Сбой копирования extra - это ошибка, а не предупреждение: иначе итог
                 // будет "completed successfully", хотя карта неполная.
                 emit log(QStringLiteral("Error: Extra content was not fully copied. Aborting before flashing."));
@@ -1431,17 +1407,10 @@ void Worker::doFlash(const Params& p) {
                 return;
             }
             emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
-            const QString extraBackupDir =
-                joinPath(sd.mountPoint, "backup_" + QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss"));
-            if (!QDir().mkpath(extraBackupDir)) {
-                emit log("Warning: Failed to create backup folder for extra content: " + extraBackupDir);
-            }
-            const bool extraOk = copyExtraToSd(extraFilesDir, sd.mountPoint, extraBackupDir);
-            // Пустую папку бэкапа убираем (если ничего не перезаписывалось)
-            if (QDir(extraBackupDir).isEmpty()) QDir().rmdir(extraBackupDir);
+            const bool extraOk = copyExtraToSd(extraFilesDir, sd.mountPoint);
 
             // Служебные файлы ОС (macOS: "._*") удаляем ДО извлечения карты
-            cleanupVolumeJunk(sd.mountPoint, extraBackupDir);
+            cleanupVolumeJunk(sd.mountPoint, QString());
 
             emit log(QStringLiteral("Ejecting SD Card drive from system..."));
             if (!ejectBestEffort(sd)) {
