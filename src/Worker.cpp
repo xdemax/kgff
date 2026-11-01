@@ -92,13 +92,63 @@ void Worker::runDownload(const Params& p) { guarded([&]() { doDownload(p); }); }
 void Worker::runFlash(const Params& p) { guarded([&]() { doFlash(p); }); }
 
 QString Worker::sevenZaPath() const {
-    // 7za лежит рядом с исполняемым файлом (CMake копирует его при сборке).
-    const QString dir = QCoreApplication::applicationDirPath();
+    // 7za встроен в бинарник (resources.qrc) и распаковывается в рабочую папку
+    // при первом обращении. Так не зависим от прав файла в сборке/архиве:
+    // configure_file(COPYONLY) и copy_if_different права +x не сохраняют.
 #ifdef Q_OS_WIN
-    return dir + QStringLiteral("/7za.exe");
+    const QString name = QStringLiteral("7za.exe");
+    const QString resPath = QStringLiteral(":/7za/win/7za.exe");
+#elif defined(Q_OS_MACOS)
+    const QString name = QStringLiteral("7za");
+    const QString resPath = QStringLiteral(":/7za/mac/7za");
 #else
-    return dir + QStringLiteral("/7za");
+    const QString name = QStringLiteral("7za");
+    const QString resPath = QStringLiteral(":/7za/linux/7za");
 #endif
+
+    const QString wd = workDir();
+    if (wd.isEmpty()) {
+        // Нет рабочей папки - используем файл рядом с бинарником (может не сработать
+        // из-за прав, но это лучше, чем ничего).
+        return QCoreApplication::applicationDirPath() + QLatin1Char('/') + name;
+    }
+    const QString target = wd + QStringLiteral("/bin/") + name;
+
+    // Уже распакован и исполняем - используем.
+    const QFileInfo fi(target);
+    if (fi.exists() && fi.size() > 0
+#if !defined(Q_OS_WIN)
+        && fi.isExecutable()
+#endif
+    ) {
+        return target;
+    }
+
+    // Распаковываем из ресурсов.
+    if (!QDir().mkpath(wd + QStringLiteral("/bin"))) {
+        return QCoreApplication::applicationDirPath() + QLatin1Char('/') + name;
+    }
+    QFile src(resPath);
+    if (!src.open(QIODevice::ReadOnly)) {
+        return QCoreApplication::applicationDirPath() + QLatin1Char('/') + name;
+    }
+    QFile dst(target);
+    if (!dst.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return QCoreApplication::applicationDirPath() + QLatin1Char('/') + name;
+    }
+    const QByteArray data = src.readAll();
+    if (dst.write(data) != data.size()) {
+        dst.close();
+        QFile::remove(target);
+        return QCoreApplication::applicationDirPath() + QLatin1Char('/') + name;
+    }
+    dst.close();
+#if !defined(Q_OS_WIN)
+    QFile::setPermissions(target, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner |
+                                      QFileDevice::ReadGroup | QFileDevice::ExeGroup |
+                                      QFileDevice::ReadOther | QFileDevice::ExeOther);
+#endif
+    return target;
 }
 
 QByteArray Worker::extraKey() const {

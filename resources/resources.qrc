@@ -1,5 +1,10 @@
 <RCC>
     <qresource prefix="/">
         <file>krb.png</file>
+        <!-- 7za встроен в бинарник: при первом запуске распаковывается в рабочую папку
+             с правами +x. Так не зависим от прав файла в сборке/архиве. -->
+        <file alias="7za/linux/7za">7za/linux/7za</file>
+        <file alias="7za/mac/7za">7za/mac/7za</file>
+        <file alias="7za/win/7za.exe">7za/win/7za.exe</file>
     </qresource>
 </RCC>
