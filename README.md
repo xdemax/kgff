@@ -19,7 +19,7 @@
 - **Обновляет прошивку** платы (микроконтроллер RP2040).
 - **Заменяет ядра** (файлы `.kg1`, `.kg2`, `.kg3`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
 - **Открывает SD-карту платы** как обычный диск, чтобы вы могли работать с её файлами напрямую.
-- **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.7z` на SD-карту.
+- **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.7z` на SD-карту. Файлы, которые уже есть на карте, перед заменой переносятся в папку `backup_*`.
 
 Прошивку и ядра можно обновлять вместе или по отдельности: например, только ядра.
 
@@ -147,7 +147,7 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 ### What the program does
 
 - **Downloads** the latest firmware and cores from the board author's GitHub repositories.
-- **Copies extra content** (ROMs, disk images, etc.) from the `extra.7z` archive to the SD card.
+- **Copies extra content** (ROMs, disk images, etc.) from the `extra.7z` archive to the SD card. Files that already exist on the card are moved to a `backup_*` folder before being replaced.
 - **Updates the board firmware** (RP2040 microcontroller).
 - **Replaces cores** (`.kg1`, `.kg2`, `.kg3` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
 - **Opens the board's SD card** as a regular drive so you can work with its files directly.

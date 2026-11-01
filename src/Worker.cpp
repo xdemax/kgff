@@ -134,6 +134,35 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
         return false;
     }
 
+    // Проверка распакованного размера ДО распаковки: 7za l -slt печатает "Size = N"
+    // для каждого файла. Складываем и сравниваем с лимитом, чтобы не забить диск.
+    {
+        QProcess list;
+        list.setProcessEnvironment(cleanChildEnvironment());
+        list.setProgram(za);
+        QByteArray key = extraKey();
+        list.setArguments(QStringList() << QStringLiteral("l") << QStringLiteral("-slt") << archivePath
+                                        << QStringLiteral("-p") + QString::fromLatin1(key));
+        key.fill('\0');
+        list.start();
+        if (list.waitForStarted(5000) && list.waitForFinished(30000) &&
+            list.exitStatus() == QProcess::NormalExit && list.exitCode() == 0) {
+            const QString text = QString::fromUtf8(list.readAllStandardOutput());
+            qint64 total = 0;
+            static const QRegularExpression sizeRe(QStringLiteral("^Size = (\\d+)$"),
+                                                   QRegularExpression::MultilineOption);
+            QRegularExpressionMatchIterator it = sizeRe.globalMatch(text);
+            while (it.hasNext()) total += it.next().captured(1).toLongLong();
+            const qint64 limit = 2LL * 1024 * 1024 * 1024;      // 2 ГБ
+            if (total > limit) {
+                emit log("Error: The extra archive expands to " + QString::number(total / (1024 * 1024)) +
+                         " MB, which exceeds the " + QString::number(limit / (1024 * 1024)) +
+                         " MB limit. Aborting extraction.");
+                return false;
+            }
+        }
+    }
+
     emit log(QStringLiteral("Extracting extra content..."));
     QProcess p;
     p.setProcessEnvironment(cleanChildEnvironment());
@@ -204,13 +233,15 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot, const Q
         }
         // Бэкап перезаписываемого файла: сохраняем старую версию в backup_*,
         // чтобы пользователь мог откатить изменения. Если файла нет - пропускаем.
+        // Существующий бэкап НЕ перезаписываем: в смешанном архиве один и тот же
+        // относительный путь может встретиться дважды (в extra/ и в корне), и второй
+        // проход затёр бы оригинал копией, записанной первым проходом.
         if (QFile::exists(dst) && !backupDir.isEmpty()) {
             const QString bak = QDir::cleanPath(backupDir + QLatin1Char('/') + rel);
             if (!QDir().mkpath(QFileInfo(bak).absolutePath())) {
                 emit log("Warning: Cannot create backup folder for " + rel);
             } else if (QFile::exists(bak)) {
-                QFile::remove(bak);
-                if (QFile::rename(dst, bak)) ++backedUp;
+                emit log("Warning: Backup already exists for " + rel + "; keeping the original backup.");
             } else if (QFile::rename(dst, bak)) {
                 ++backedUp;
             }
@@ -218,6 +249,10 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot, const Q
         QString e;
         if (!copyFileSynced(src, dst, &e)) {
             emit log("Warning: Failed to copy " + rel + ": " + e);
+            if (!backupDir.isEmpty() && QFile::exists(QDir::cleanPath(backupDir + QLatin1Char('/') + rel))) {
+                emit log("Warning: The previous version of " + rel +
+                         " is preserved in the backup folder; the file on the SD card may be missing or truncated.");
+            }
             ++failed;
             return false;
         }
@@ -255,8 +290,11 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot, const Q
     }
 
     // 1) Содержимое верхней папки "extra/" -> в корень SD
+    // QDir::NoSymLinks: симлинки из архива не копируем - иначе можно вытащить
+    // произвольный локальный файл по ссылке (актуально для недоверенного архива).
     if (hasExtraSubdir) {
-        QDirIterator it(extraSubdir, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        QDirIterator it(extraSubdir, QDir::Files | QDir::NoSymLinks | QDir::NoDotAndDotDot,
+                        QDirIterator::Subdirectories);
         while (it.hasNext()) {
             const QString src = it.next();
             const QString rel = QDir(extraSubdir).relativeFilePath(src);
@@ -273,20 +311,23 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot, const Q
             continue;       // уже обработано выше
         }
         if (fi.isDir()) {
-            QDirIterator it(fi.absoluteFilePath(), QDir::Files | QDir::NoDotAndDotDot,
+            QDirIterator it(fi.absoluteFilePath(), QDir::Files | QDir::NoSymLinks | QDir::NoDotAndDotDot,
                             QDirIterator::Subdirectories);
             while (it.hasNext()) {
                 const QString src = it.next();
                 const QString rel = QDir(srcDir).relativeFilePath(src);
                 copyOne(src, rel);
             }
-        } else {
+        } else if (!fi.isSymLink()) {
             copyOne(fi.absoluteFilePath(), fi.fileName());
         }
     }
     emit log("Extra content copied: " + QString::number(copied) + " files" +
              (backedUp > 0 ? ", " + QString::number(backedUp) + " backed up" : QString()) +
              (failed > 0 ? ", " + QString::number(failed) + " failed" : QString()) + ".");
+    if (failed > 0) {
+        emit log("Error: Some extra content files could not be copied. The SD card may be incomplete.");
+    }
     return failed == 0;
 }
 
@@ -1330,14 +1371,27 @@ void Worker::doFlash(const Params& p) {
             if (!QDir().mkpath(extraBackupDir)) {
                 emit log("Warning: Failed to create backup folder for extra content: " + extraBackupDir);
             }
-            if (!copyExtraToSd(extraFilesDir, sd.mountPoint, extraBackupDir)) {
-                emit log(QStringLiteral("Warning: Some extra content files could not be copied."));
-            }
+            const bool extraOk = copyExtraToSd(extraFilesDir, sd.mountPoint, extraBackupDir);
             // Пустую папку бэкапа убираем (если ничего не перезаписывалось)
             if (QDir(extraBackupDir).isEmpty()) QDir().rmdir(extraBackupDir);
+
+            // Служебные файлы ОС (macOS: "._*") удаляем ДО извлечения карты
+            {
+                QStringList extraDirs;
+                if (QFileInfo(extraBackupDir).isDir()) extraDirs << extraBackupDir;
+                const int cleaned = Platform::cleanupVolumeJunk(sd.mountPoint, extraDirs);
+                if (cleaned > 0) {
+                    emit log("Removed " + QString::number(cleaned) + " system service files from the SD card.");
+                }
+            }
+
             emit log(QStringLiteral("Ejecting SD Card drive from system..."));
             if (!ejectBestEffort(sd)) {
                 emit log(QStringLiteral("Error: The SD card could not be ejected. Replug the Karabas."));
+                return;
+            }
+            if (!extraOk) {
+                emit log(QStringLiteral("Error: Extra content was not fully copied. See the warnings above."));
                 return;
             }
         }
