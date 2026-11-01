@@ -1126,6 +1126,15 @@ bool Worker::waitForMountedVolume(const std::function<QList<Platform::Candidate>
     return false;
 }
 
+void Worker::cleanupVolumeJunk(const QString& root, const QString& backupDir) {
+    QStringList extraDirs;
+    if (QFileInfo(backupDir).isDir()) extraDirs << backupDir;
+    const int cleaned = Platform::cleanupVolumeJunk(root, extraDirs);
+    if (cleaned > 0) {
+        emit log("Removed " + QString::number(cleaned) + " system service files from the SD card.");
+    }
+}
+
 bool Worker::ejectBestEffort(const Platform::Candidate& sd) {
     QString detail;
     if (Platform::ejectCandidate(sd, &detail)) {
@@ -1156,7 +1165,7 @@ void Worker::rollbackCores(const QStringList& copiedNew, const QList<QPair<QStri
 // true - можно продолжать прошивку; false - операция прервана.
 // ----------------------------------------------------------------------------
 bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
-                             const QStringList& newCores, bool updateExtra) {
+                             const QStringList& newCores, bool updateExtra, bool updateFirmware) {
     emit log(QStringLiteral("Cores check active. Switching Karabas to SD Card MSC mode (card 1)..."));
 
     // Снимок USB-дисков с носителем ДО переключения
@@ -1288,40 +1297,41 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
                 emit log(QStringLiteral("Error: Extra content was not fully copied. Aborting before flashing."));
                 // Служебные файлы ОС (macOS: "._*") удаляем ДО извлечения карты, иначе
                 // они останутся на карте (например, "._alf.kg3").
-                {
-                    QStringList extraDirs;
-                    if (QFileInfo(backupDir).isDir()) extraDirs << backupDir;
-                    const int cleaned = Platform::cleanupVolumeJunk(root, extraDirs);
-                    if (cleaned > 0) {
-                        emit log("Removed " + QString::number(cleaned) + " system service files from the SD card.");
+                cleanupVolumeJunk(root, backupDir);
+                const bool ejected = ejectBestEffort(sd);
+                if (updateFirmware) {
+                    if (ejected) {
+                        emit log(QStringLiteral("The cores have already been updated on the SD card, but the "
+                                                "firmware was not flashed. Press FLASH again with only "
+                                                "'Update firmware' checked to finish flashing the firmware."));
+                    } else {
+                        emit log(QStringLiteral("The cores have already been updated on the SD card, but the "
+                                                "firmware was not flashed. Replug the Karabas, then press FLASH "
+                                                "again with only 'Update firmware' checked to finish flashing "
+                                                "the firmware."));
                     }
                 }
-                emit log(QStringLiteral("The cores have already been updated on the SD card, but the firmware "
-                                        "was not flashed. Replug the Karabas, then press FLASH again with only "
-                                        "'Update firmware' checked to finish flashing the firmware."));
-                ejectBestEffort(sd);
                 return false;
             }
         }
     }
 
     // Служебные файлы ОС (macOS: "._*") удаляем ДО извлечения карты
-    {
-        QStringList extraDirs;
-        if (QFileInfo(backupDir).isDir()) extraDirs << backupDir;
-        const int cleaned = Platform::cleanupVolumeJunk(root, extraDirs);
-        if (cleaned > 0) {
-            emit log("Removed " + QString::number(cleaned) + " system service files from the SD card.");
-        }
-    }
+    cleanupVolumeJunk(root, backupDir);
 
     emit log(QStringLiteral("Ejecting SD Card drive from system..."));
     if (!ejectBestEffort(sd)) {
         // Без eject Карабас не выйдет из режима MSC, порта не будет - ждать его бессмысленно
-        emit log(QStringLiteral("Error: The SD card could not be ejected, so the device cannot leave MSC mode by "
-                                "itself. The new cores are already on the card. Replug the Karabas (unplug and plug "
-                                "the USB cable), then press FLASH again with only 'Update firmware' checked to finish "
-                                "flashing the firmware."));
+        if (updateFirmware) {
+            emit log(QStringLiteral("Error: The SD card could not be ejected, so the device cannot leave MSC mode by "
+                                    "itself. The new cores are already on the card. Replug the Karabas (unplug and plug "
+                                    "the USB cable), then press FLASH again with only 'Update firmware' checked to finish "
+                                    "flashing the firmware."));
+        } else {
+            emit log(QStringLiteral("Error: The SD card could not be ejected, so the device cannot leave MSC mode by "
+                                    "itself. The new cores are already on the card. Replug the Karabas (unplug and plug "
+                                    "the USB cable)."));
+        }
         return false;
     }
     return true;
@@ -1389,7 +1399,7 @@ void Worker::doFlash(const Params& p) {
         // Один MSC-сеанс: сначала ядра, затем extra (обе операции на карте №1).
         if (p.updateCores) {
             const ModelInfo& m = models().at(p.modelIndex);
-            if (!updateCoresOnSd(m, p.portLocation, newCores, p.updateExtra)) return;
+            if (!updateCoresOnSd(m, p.portLocation, newCores, p.updateExtra, p.updateFirmware)) return;
         } else {
             // Только extra: открываем MSC и копируем.
             emit log(QStringLiteral("Switching Karabas to SD Card MSC mode (card 1) for extra content..."));
@@ -1420,14 +1430,7 @@ void Worker::doFlash(const Params& p) {
             if (QDir(extraBackupDir).isEmpty()) QDir().rmdir(extraBackupDir);
 
             // Служебные файлы ОС (macOS: "._*") удаляем ДО извлечения карты
-            {
-                QStringList extraDirs;
-                if (QFileInfo(extraBackupDir).isDir()) extraDirs << extraBackupDir;
-                const int cleaned = Platform::cleanupVolumeJunk(sd.mountPoint, extraDirs);
-                if (cleaned > 0) {
-                    emit log("Removed " + QString::number(cleaned) + " system service files from the SD card.");
-                }
-            }
+            cleanupVolumeJunk(sd.mountPoint, extraBackupDir);
 
             emit log(QStringLiteral("Ejecting SD Card drive from system..."));
             if (!ejectBestEffort(sd)) {

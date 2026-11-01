@@ -96,9 +96,11 @@ private:
     bool waitForMountedVolume(const std::function<QList<Platform::Candidate>()>& finder,
                               int timeoutMs, Platform::Candidate* out);
     bool updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
-                         const QStringList& newCores, bool updateExtra);
+                         const QStringList& newCores, bool updateExtra, bool updateFirmware);
     void rollbackCores(const QStringList& copiedNew, const QList<QPair<QString, QString>>& movedOld);
     bool ejectBestEffort(const Platform::Candidate& sd);
+    // Удаляет служебные файлы ОС (macOS: "._*", .DS_Store и т.п.) с тома перед извлечением.
+    void cleanupVolumeJunk(const QString& root, const QString& backupDir);
 
     // Extra content: скачивание extra.7z, распаковка через 7za, копирование на SD.
     bool downloadExtraArchive(const QString& destPath);
