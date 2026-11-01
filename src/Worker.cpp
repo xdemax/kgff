@@ -66,6 +66,7 @@ QString joinPath(const QString& dir, const QString& name) {
 // ----------------------------------------------------------------------------
 void Worker::guarded(const std::function<void()>& fn) {
     m_permissionDenied = false;
+    m_portOpenFailed = false;
     try {
         fn();
     } catch (const std::exception& e) {
@@ -792,6 +793,7 @@ bool Worker::sendAtCommand(const QString& portLocation, const QByteArray& cmd,
         msg += " Make sure the port is not used by another application.";
 #endif
         emit log(msg);
+        m_portOpenFailed = true;
         if (m_permissionDenied) {
             emit portAccessDenied(portLocation);
         }
@@ -810,6 +812,7 @@ bool Worker::sendAtCommand(const QString& portLocation, const QByteArray& cmd,
 
     if (sp.write(cmd) != cmd.size() || !sp.waitForBytesWritten(2000)) {
         emit log(QStringLiteral("Error: Failed to write data to the serial port."));
+        m_portOpenFailed = true;
         return false;
     }
 
@@ -860,14 +863,13 @@ bool Worker::sendMscCommand(const QString& portLocation, int mscMode) {
         //   1) порт не открылся (нет прав, занят) - это ошибка, ждать диск бессмысленно;
         //   2) запись не удалась - тоже ошибка;
         //   3) ответа нет - это нормально: устройство могло уже перезагрузиться в MSC.
-        // Отличить (1)/(2) от (3) можно по флагу m_permissionDenied и по тому, был ли
-        // вообще открыт порт. sendAtCommand уже залогировал причину, поэтому здесь
-        // достаточно проверить m_permissionDenied и пустой ответ.
-        if (m_permissionDenied) {
-            emit log(QStringLiteral("Error: No permission to open the serial port. The MSC command was not sent."));
+        // (1) и (2) помечаются флагом m_portOpenFailed (не зависит от платформы),
+        // (3) - это пустой ответ без ошибки открытия/записи.
+        if (m_portOpenFailed) {
+            emit log(QStringLiteral("Error: The MSC command could not be sent (port open/write failed)."));
             return false;
         }
-        // Пустой ответ без ошибки доступа - устройство уже перезагрузилось в MSC.
+        // Пустой ответ без ошибки открытия/записи - устройство уже перезагрузилось в MSC.
         return true;
     }
     const QString text = QString::fromUtf8(resp).trimmed();
@@ -900,8 +902,9 @@ bool Worker::queryVersion(const QString& portLocation, QString* raw, int* board)
         }
         if (!sendAtCommand(portLocation, cmd, &resp, 4000)) {
             // sendAtCommand уже залогировал ошибку открытия/записи/отмены.
-            // Пустой ответ — повод для повтора, поэтому не выходим сразу.
-            if (m_cancel.load()) return false;
+            // Если порт не открылся или запись не удалась - повторять бессмысленно
+            // (и это не должно повторно показывать диалог udev).
+            if (m_cancel.load() || m_portOpenFailed) return false;
         }
     }
 
@@ -936,6 +939,7 @@ bool Worker::resetPortToBootloader(const QString& portLocation) {
     sp.setBaudRate(1200);
     if (!sp.open(QIODevice::ReadWrite)) {
         emit log("Failed to open port " + portLocation + " for 1200 bps reset: " + sp.errorString());
+        m_portOpenFailed = true;
 #if defined(Q_OS_LINUX)
         if (sp.error() == QSerialPort::PermissionError) {
             m_permissionDenied = true;
@@ -1307,13 +1311,15 @@ void Worker::doFlash(const Params& p) {
             emit log("Warning: Chosen port " + p.portLocation +
                      " not detected automatically (the device name may have changed). Trying to open directly.");
         }
-        if (!resetPortToBootloader(p.portLocation) && m_permissionDenied) {
-            emit log(QStringLiteral("Error: No permission to access the serial port. Aborting before flashing."));
+        if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
+            emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
+                                    "Aborting before flashing."));
             return;
         }
     } else if (!p.portLocation.isEmpty()) {
-        if (!resetPortToBootloader(p.portLocation) && m_permissionDenied) {
-            emit log(QStringLiteral("Error: No permission to access the serial port. Aborting before flashing."));
+        if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
+            emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
+                                    "Aborting before flashing."));
             return;
         }
     } else {

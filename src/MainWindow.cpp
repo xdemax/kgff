@@ -551,7 +551,12 @@ void MainWindow::onPortAccessDenied(const QString& portLocation) {
 }
 
 void MainWindow::cleanupTemp() {
-    if (m_delTempChk->isChecked()) QDir(workDir()).removeRecursively();
+    if (!m_delTempChk->isChecked()) return;
+    const QString wd = workDir();
+    // Пустой путь (CacheLocation недоступен) нельзя передавать в QDir: QDir("")
+    // указывает на текущую папку процесса, и removeRecursively() снёс бы её.
+    if (wd.isEmpty()) return;
+    QDir(wd).removeRecursively();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {

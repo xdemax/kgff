@@ -109,4 +109,5 @@ private:
 
     std::atomic<bool> m_cancel{false};
     bool m_permissionDenied = false;                    // только рабочий поток
+    bool m_portOpenFailed = false;                      // порт не открылся или запись не удалась
 };

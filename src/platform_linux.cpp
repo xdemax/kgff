@@ -20,7 +20,9 @@ namespace {
 int runProcess(const QString& program, const QStringList& args, int timeoutMs,
                QString* out = nullptr, QString* err = nullptr) {
     QProcess p;
-    p.setProcessEnvironment(cleanChildEnvironment());
+    // udisksctl/gdbus/busctl/eject: их текстовый вывод разбирается регулярками,
+    // поэтому запускаем с C-локалью. xdg-open и 7za идут через cleanChildEnvironment().
+    p.setProcessEnvironment(cleanChildEnvironmentCLocale());
     p.start(program, args);
     if (!p.waitForStarted(3000)) return -1;
     if (!p.waitForFinished(timeoutMs)) {

@@ -48,10 +48,6 @@ QStringList listFilesWithExt(const QString& dir, const QString& ext) {
 
 QProcessEnvironment cleanChildEnvironment() {
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    // Системные утилиты (udisksctl, diskutil, 7za) парсятся по тексту сообщений.
-    // Принудительно ставим C-локаль, чтобы сообщения не переводились и не ломали разбор.
-    env.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
-    env.insert(QStringLiteral("LANG"), QStringLiteral("C"));
     const QString appdir = env.value(QStringLiteral("APPDIR"));
     if (!appdir.isEmpty()) {
         QStringList keep;
@@ -62,6 +58,13 @@ QProcessEnvironment cleanChildEnvironment() {
         if (keep.isEmpty()) env.remove(QStringLiteral("LD_LIBRARY_PATH"));
         else env.insert(QStringLiteral("LD_LIBRARY_PATH"), keep.join(QLatin1Char(':')));
     }
+    return env;
+}
+
+QProcessEnvironment cleanChildEnvironmentCLocale() {
+    QProcessEnvironment env = cleanChildEnvironment();
+    env.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
+    env.insert(QStringLiteral("LANG"), QStringLiteral("C"));
     return env;
 }
 

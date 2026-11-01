@@ -17,6 +17,10 @@ QStringList listFilesWithExt(const QString& dir, const QString& ext);
 // программы, поэтому такие пути из неё убираются. Вне AppImage окружение не меняется.
 QProcessEnvironment cleanChildEnvironment();
 
+// То же окружение, но с принудительной C-локалью: для утилит, чей текстовый вывод
+// разбирается (udisksctl). Для xdg-open и 7za использовать cleanChildEnvironment().
+QProcessEnvironment cleanChildEnvironmentCLocale();
+
 // Открыть папку в файловом менеджере системы (Проводник, Finder, xdg-open).
 bool openInFileManager(const QString& path);
 
