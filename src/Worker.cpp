@@ -183,25 +183,63 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot) {
     int copied = 0;
     int failed = 0;
 
-    // Если в архиве всё лежит под единственным верхним каталогом "extra/",
-    // срезаем его: содержимое должно попадать в корень SD-карты, а не в <SD>/extra/.
-    QString baseDir = srcDir;
-    {
-        const QFileInfoList top = QDir(srcDir).entryInfoList(
-            QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
-        if (top.size() == 1 && top.first().isDir() &&
-            top.first().fileName().compare(QStringLiteral("extra"), Qt::CaseInsensitive) == 0) {
-            baseDir = top.first().absoluteFilePath();
-            emit log(QStringLiteral("Extra archive has a top-level 'extra' folder; its contents will be "
-                                    "copied to the SD card root."));
+    // Если в архиве есть верхний каталог "extra/", его содержимое копируется в корень
+    // SD-карты (без вложенной папки extra). Остальные элементы корня копируются как есть.
+    const QString extraSubdir = srcDir + QStringLiteral("/extra");
+    const bool hasExtraSubdir = QFileInfo(extraSubdir).isDir();
+    if (hasExtraSubdir) {
+        emit log(QStringLiteral("Extra archive has a top-level 'extra' folder; its contents will be "
+                                "copied to the SD card root."));
+    }
+
+    auto copyOne = [&](const QString& src, const QString& rel) -> bool {
+        const QString dst = QDir::cleanPath(sdRoot + QLatin1Char('/') + rel);
+        const QString dstDir = QFileInfo(dst).absolutePath();
+        if (!QDir().mkpath(dstDir)) {
+            emit log("Warning: Cannot create folder " + dstDir);
+            ++failed;
+            return false;
+        }
+        QString e;
+        if (!copyFileSynced(src, dst, &e)) {
+            emit log("Warning: Failed to copy " + rel + ": " + e);
+            ++failed;
+            return false;
+        }
+        ++copied;
+        return true;
+    };
+
+    // 1) Содержимое верхней папки "extra/" -> в корень SD
+    if (hasExtraSubdir) {
+        QDirIterator it(extraSubdir, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString src = it.next();
+            const QString rel = QDir(extraSubdir).relativeFilePath(src);
+            copyOne(src, rel);
         }
     }
 
-    QDirIterator it(baseDir, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-    while (it.hasNext()) {
-        const QString src = it.next();
-        const QString rel = QDir(baseDir).relativeFilePath(src);
-        const QString dst = QDir::cleanPath(sdRoot + QLatin1Char('/') + rel);
+    // 2) Остальные элементы корня распаковки (кроме самой папки "extra") -> как есть
+    const QFileInfoList top = QDir(srcDir).entryInfoList(
+        QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
+    for (const QFileInfo& fi : top) {
+        if (hasExtraSubdir && fi.isDir() &&
+            fi.fileName().compare(QStringLiteral("extra"), Qt::CaseInsensitive) == 0) {
+            continue;       // уже обработано выше
+        }
+        if (fi.isDir()) {
+            QDirIterator it(fi.absoluteFilePath(), QDir::Files | QDir::NoDotAndDotDot,
+                            QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QString src = it.next();
+                const QString rel = QDir(srcDir).relativeFilePath(src);
+                copyOne(src, rel);
+            }
+        } else {
+            copyOne(fi.absoluteFilePath(), fi.fileName());
+        }
+    }
         const QString dstDir = QFileInfo(dst).absolutePath();
         if (!QDir().mkpath(dstDir)) {
             emit log("Warning: Cannot create folder " + dstDir);
