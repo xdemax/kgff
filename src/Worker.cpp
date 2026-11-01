@@ -1314,11 +1314,14 @@ void Worker::doFlash(const Params& p) {
         // Сначала пробуем сброс: если порт Карабаса живой, он всегда должен сработать.
         // Проверка bootloaderDisks() до сброса опасна: если рядом в BOOTSEL лежит другая
         // RP2040-плата (Pico и т.п.), сброс будет пропущен, и прошивка уйдёт на чужую плату.
-        // Проверяем готовый диск только при ошибке открытия порта (устаревший порт).
+        // Продолжаем без сброса только если порт РЕАЛЬНО отсутствует в системе (устаревший
+        // выбор) и нет отказа в правах. Если порт есть, но не открылся (занят, нет прав) -
+        // прерываемся: иначе можно прошить чужую плату в BOOTSEL.
         if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
-            if (!Platform::bootloaderDisks().isEmpty()) {
-                emit log(QStringLiteral("The serial port could not be opened, but the RPI-RP2 bootloader drive "
-                                        "is already present; continuing without the 1200 bps reset."));
+            const bool portGone = !m_permissionDenied && !isPortPresent(p.portLocation);
+            if (portGone && !Platform::bootloaderDisks().isEmpty()) {
+                emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
+                                        "is already available; continuing without the 1200 bps reset."));
             } else {
                 emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                         "Aborting before flashing."));
@@ -1327,9 +1330,10 @@ void Worker::doFlash(const Params& p) {
         }
     } else if (!p.portLocation.isEmpty()) {
         if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
-            if (!Platform::bootloaderDisks().isEmpty()) {
-                emit log(QStringLiteral("The serial port could not be opened, but the RPI-RP2 bootloader drive "
-                                        "is already present; continuing without the 1200 bps reset."));
+            const bool portGone = !m_permissionDenied && !isPortPresent(p.portLocation);
+            if (portGone && !Platform::bootloaderDisks().isEmpty()) {
+                emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
+                                        "is already available; continuing without the 1200 bps reset."));
             } else {
                 emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                         "Aborting before flashing."));
@@ -1354,7 +1358,7 @@ void Worker::doFlash(const Params& p) {
         }
         return;
     }
-    emit log("Target drive found: " + boot.mountPoint + " [RPI-RP2]");
+    emit log("Target drive found: " + boot.mountPoint + " [RPI-RP2] (" + boot.node + ")");
 
     // ---- Запись прошивки: не прерывается ----
     const QString target = joinPath(boot.mountPoint, QStringLiteral("firmware.uf2"));
