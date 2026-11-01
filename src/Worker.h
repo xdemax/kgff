@@ -102,11 +102,10 @@ private:
     // Удаляет служебные файлы ОС (macOS: "._*", .DS_Store и т.п.) с тома перед извлечением.
     void cleanupVolumeJunk(const QString& root, const QString& backupDir);
 
-    // Extra content: скачивание extra.7z, распаковка через 7za, копирование на SD.
+    // Extra content: скачивание extra.7z, распаковка через libarchive, копирование на SD.
     bool downloadExtraArchive(const QString& destPath);
     bool extractExtraArchive(const QString& archivePath, const QString& outDir);
     bool copyExtraToSd(const QString& srcDir, const QString& sdRoot);
-    QString sevenZaPath() const;
     QByteArray extraKey() const;
 
     std::atomic<bool> m_cancel{false};

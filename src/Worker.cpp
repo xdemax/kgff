@@ -6,6 +6,10 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QStorageInfo>
+#include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -31,6 +35,9 @@
 #include <algorithm>
 #include <exception>
 #include <memory>
+
+#include <archive.h>
+#include <archive_entry.h>
 
 namespace {
 const qint64 kMaxTextBytes = 4 * 1024 * 1024;       // JSON / HTML
@@ -91,66 +98,6 @@ bool Worker::pause(int ms) {
 void Worker::runDownload(const Params& p) { guarded([&]() { doDownload(p); }); }
 void Worker::runFlash(const Params& p) { guarded([&]() { doFlash(p); }); }
 
-QString Worker::sevenZaPath() const {
-    // 7za встроен в бинарник (resources.qrc) и распаковывается в рабочую папку
-    // при первом обращении. Так не зависим от прав файла в сборке/архиве:
-    // configure_file(COPYONLY) и copy_if_different права +x не сохраняют.
-#ifdef Q_OS_WIN
-    const QString name = QStringLiteral("7za.exe");
-    const QString resPath = QStringLiteral(":/7za/win/7za.exe");
-#elif defined(Q_OS_MACOS)
-    const QString name = QStringLiteral("7za");
-    const QString resPath = QStringLiteral(":/7za/mac/7za");
-#else
-    const QString name = QStringLiteral("7za");
-    const QString resPath = QStringLiteral(":/7za/linux/7za");
-#endif
-
-    const QString wd = workDir();
-    if (wd.isEmpty()) {
-        // Нет рабочей папки - используем файл рядом с бинарником (может не сработать
-        // из-за прав, но это лучше, чем ничего).
-        return QCoreApplication::applicationDirPath() + QLatin1Char('/') + name;
-    }
-    const QString target = wd + QStringLiteral("/bin/") + name;
-
-    // Уже распакован и исполняем - используем.
-    const QFileInfo fi(target);
-    if (fi.exists() && fi.size() > 0
-#if !defined(Q_OS_WIN)
-        && fi.isExecutable()
-#endif
-    ) {
-        return target;
-    }
-
-    // Распаковываем из ресурсов.
-    if (!QDir().mkpath(wd + QStringLiteral("/bin"))) {
-        return QCoreApplication::applicationDirPath() + QLatin1Char('/') + name;
-    }
-    QFile src(resPath);
-    if (!src.open(QIODevice::ReadOnly)) {
-        return QCoreApplication::applicationDirPath() + QLatin1Char('/') + name;
-    }
-    QFile dst(target);
-    if (!dst.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        return QCoreApplication::applicationDirPath() + QLatin1Char('/') + name;
-    }
-    const QByteArray data = src.readAll();
-    if (dst.write(data) != data.size()) {
-        dst.close();
-        QFile::remove(target);
-        return QCoreApplication::applicationDirPath() + QLatin1Char('/') + name;
-    }
-    dst.close();
-#if !defined(Q_OS_WIN)
-    QFile::setPermissions(target, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner |
-                                      QFileDevice::ReadGroup | QFileDevice::ExeGroup |
-                                      QFileDevice::ReadOther | QFileDevice::ExeOther);
-#endif
-    return target;
-}
-
 QByteArray Worker::extraKey() const {
     const int n = static_cast<int>(sizeof(kExtraBlob));
     QByteArray out(n, '\0');
@@ -173,104 +120,103 @@ bool Worker::downloadExtraArchive(const QString& destPath) {
 }
 
 bool Worker::extractExtraArchive(const QString& archivePath, const QString& outDir) {
-    const QString za = sevenZaPath();
-    if (!QFileInfo::exists(za)) {
-        emit log("Error: 7za binary not found at " + za + ". Reinstall the application.");
-        return false;
-    }
-#if !defined(Q_OS_WIN)
-    // Страховка: если бит исполнения потерялся при копировании (CMake COPYONLY,
-    // распаковка zip без прав), 7za не запустится ("execve: Permission denied").
-    {
-        const QFileInfo fi(za);
-        if (!fi.isExecutable()) {
-            QFile::setPermissions(za, fi.permissions() | QFileDevice::ExeOwner |
-                                           QFileDevice::ExeGroup | QFileDevice::ExeOther);
-        }
-    }
-#endif
     QDir(outDir).removeRecursively();
     if (!QDir().mkpath(outDir)) {
         emit log("Error: Cannot create folder for extra content: " + outDir);
         return false;
     }
 
-    // Проверка распакованного размера ДО распаковки: 7za l -slt печатает "Size = N"
-    // для каждого файла. Складываем и сравниваем с лимитом, чтобы не забить диск.
-    {
-        QProcess list;
-        list.setProcessEnvironment(cleanChildEnvironment());
-        list.setProgram(za);
-        QByteArray key = extraKey();
-        list.setArguments(QStringList() << QStringLiteral("l") << QStringLiteral("-slt") << archivePath
-                                        << QStringLiteral("-p") + QString::fromLatin1(key));
-        key.fill('\0');
-        list.start();
-        if (list.waitForStarted(5000) && list.waitForFinished(30000) &&
-            list.exitStatus() == QProcess::NormalExit && list.exitCode() == 0) {
-            const QString text = QString::fromUtf8(list.readAllStandardOutput());
-            qint64 total = 0;
-            // \s*$ - на Windows 7za печатает CRLF, и без \s* строка "Size = N\r" не совпадёт.
-            static const QRegularExpression sizeRe(QStringLiteral("^Size = (\\d+)\\s*$"),
-                                                   QRegularExpression::MultilineOption);
-            QRegularExpressionMatchIterator it = sizeRe.globalMatch(text);
-            while (it.hasNext()) total += it.next().captured(1).toLongLong();
-            const qint64 limit = 2LL * 1024 * 1024 * 1024;      // 2 ГБ
-            if (total > limit) {
-                emit log("Error: The extra archive expands to " + QString::number(total / (1024 * 1024)) +
-                         " MB, which exceeds the " + QString::number(limit / (1024 * 1024)) +
-                         " MB limit. Aborting extraction.");
-                return false;
-            }
-            if (total == 0) {
-                emit log(QStringLiteral("Warning: Could not determine the unpacked size of the extra archive; "
-                                        "skipping the size check."));
-            }
-        } else {
-            emit log(QStringLiteral("Warning: Could not list the extra archive to check its unpacked size; "
-                                    "skipping the size check."));
-        }
-    }
-
     emit log(QStringLiteral("Extracting extra content..."));
-    QProcess p;
-    p.setProcessEnvironment(cleanChildEnvironment());
-    p.setProgram(za);
-    // Пароль передаётся аргументом -p<password>: на Windows 7za при "-p" без значения
-    // читает пароль с консоли (ReadConsole), а не из stdin, и распаковка падает
-    // с "Can not open the file as archive". Аргумент виден в списке процессов,
-    // но это локальная утилита, запускаемая на короткое время.
+
     QByteArray key = extraKey();
-    p.setArguments(QStringList() << QStringLiteral("x") << archivePath
-                                 << QStringLiteral("-o") + outDir
-                                 << QStringLiteral("-y")
-                                 << QStringLiteral("-p") + QString::fromLatin1(key));
+    struct archive* a = archive_read_new();
+    archive_read_support_format_7zip(a);
+    archive_read_support_filter_all(a);
+    if (archive_read_add_passphrase(a, key.constData()) != ARCHIVE_OK) {
+        emit log("Error: libarchive does not support passphrases.");
+        archive_read_free(a);
+        key.fill('\0');
+        return false;
+    }
     key.fill('\0');
-    p.start();
-    if (!p.waitForStarted(5000)) {
-        emit log("Error: Cannot start 7za: " + p.errorString());
+
+    if (archive_read_open_filename(a, archivePath.toUtf8().constData(), 10240) != ARCHIVE_OK) {
+        emit log("Error: Cannot open extra archive: " + QString::fromUtf8(archive_error_string(a)));
+        archive_read_free(a);
         return false;
     }
 
-    if (!p.waitForFinished(120000)) {
-        p.kill();
-        p.waitForFinished(1000);
-        emit log(QStringLiteral("Error: 7za timed out."));
-        return false;
+    const qint64 limit = 2LL * 1024 * 1024 * 1024;      // 2 ГБ
+    qint64 total = 0;
+    int extracted = 0;
+    bool failed = false;
+
+    struct archive_entry* entry = nullptr;
+    while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+        const char* name = archive_entry_pathname(entry);
+        if (!name) continue;
+        const QString rel = QString::fromUtf8(name);
+        if (rel.isEmpty() || rel.startsWith(QLatin1Char('/')) || rel.contains(QStringLiteral(".."))) {
+            emit log("Warning: Skipping unsafe path in archive: " + rel);
+            continue;
+        }
+        const QString dst = QDir::cleanPath(outDir + QLatin1Char('/') + rel);
+
+        if (archive_entry_filetype(entry) == AE_IFDIR) {
+            QDir().mkpath(dst);
+            continue;
+        }
+        if (archive_entry_filetype(entry) != AE_IFREG) {
+            emit log("Warning: Skipping non-regular file in archive: " + rel);
+            continue;
+        }
+
+        total += archive_entry_size(entry);
+        if (total > limit) {
+            emit log("Error: The extra archive expands to more than " +
+                     QString::number(limit / (1024 * 1024)) + " MB. Aborting extraction.");
+            failed = true;
+            break;
+        }
+
+        QDir().mkpath(QFileInfo(dst).absolutePath());
+        QFile out(dst);
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            emit log("Warning: Cannot create " + rel + ": " + out.errorString());
+            failed = true;
+            continue;
+        }
+        const void* buf = nullptr;
+        size_t size = 0;
+        la_int64_t offset = 0;
+        int r;
+        while ((r = archive_read_data_block(a, &buf, &size, &offset)) == ARCHIVE_OK) {
+            if (out.write(static_cast<const char*>(buf), static_cast<qint64>(size)) != static_cast<qint64>(size)) {
+                emit log("Warning: Write error for " + rel + ": " + out.errorString());
+                failed = true;
+                break;
+            }
+        }
+        out.close();
+        if (r != ARCHIVE_EOF && r != ARCHIVE_OK) {
+            emit log("Warning: Read error for " + rel + ": " + QString::fromUtf8(archive_error_string(a)));
+            failed = true;
+        }
+        ++extracted;
     }
-    if (p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0) {
-        const QString err = QString::fromUtf8(p.readAllStandardError()).trimmed();
-        const QString out = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
-        QString detail = err;
-        if (!out.isEmpty()) detail += (detail.isEmpty() ? QString() : QStringLiteral(" | ")) + out;
-        emit log("Error: 7za failed (code " + QString::number(p.exitCode()) + "): " + detail);
-        return false;
+
+    if (archive_read_has_encrypted_entries(a) == 1 && extracted == 0) {
+        emit log(QStringLiteral("Error: The extra archive is encrypted and the passphrase is wrong."));
+        failed = true;
     }
-    // Проверяем, что распаковка дала хоть какие-то файлы (пустой архив или неверный пароль
-    // могут завершиться с кодом 0, но без файлов).
-    const QDirIterator check(outDir, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-    if (!check.hasNext()) {
+    archive_read_free(a);
+
+    if (extracted == 0) {
         emit log(QStringLiteral("Error: The extra archive is empty or corrupted."));
+        return false;
+    }
+    if (failed) {
+        emit log(QStringLiteral("Error: Some files could not be extracted from the extra archive."));
         return false;
     }
     emit log(QStringLiteral("Extra content extracted successfully."));

@@ -16,6 +16,16 @@ if(NOT Qt6_FOUND)
         "If Qt is installed in a non-standard place, pass -DCMAKE_PREFIX_PATH=<path to Qt>.")
 endif()
 
+# libarchive: распаковка extra.7z без внешнего 7za (BSD-2-Clause, есть во всех дистрибутивах).
+find_package(LibArchive QUIET)
+if(NOT LibArchive_FOUND)
+    message(FATAL_ERROR
+        "libarchive was not found.\n"
+        "  Ubuntu/Debian: sudo apt install libarchive-dev\n"
+        "  Fedora:        sudo dnf install libarchive-devel\n"
+        "  Arch/Manjaro:  sudo pacman -S libarchive")
+endif()
+
 # Версия: номер из project(... VERSION) + описание из git (тег, число коммитов, хэш, -dirty).
 # Описание считается при конфигурации; если git нет (сборка из zip), будет "no-git".
 find_package(Git QUIET)
@@ -43,18 +53,6 @@ else()
     message(FATAL_ERROR "Unsupported platform. See src/Platform.h for the interface to implement.")
 endif()
 
-# Бинарники 7za встроены в ресурсы (resources/resources.qrc) и распаковываются
-# в рабочую папку при первом запуске. Проверяем, что они есть в репозитории.
-if(WIN32)
-    set(SEVENZA_SRC "${CMAKE_SOURCE_DIR}/resources/7za/win/7za.exe")
-elseif(APPLE)
-    set(SEVENZA_SRC "${CMAKE_SOURCE_DIR}/resources/7za/mac/7za")
-else()
-    set(SEVENZA_SRC "${CMAKE_SOURCE_DIR}/resources/7za/linux/7za")
-endif()
-if(NOT EXISTS "${SEVENZA_SRC}")
-    message(FATAL_ERROR "7za binary not found: ${SEVENZA_SRC}. See resources/7za/README.")
-endif()
 
 qt_add_executable(KarabasFlasher WIN32 MACOSX_BUNDLE
     resources/resources.qrc
@@ -74,11 +72,10 @@ qt_add_executable(KarabasFlasher WIN32 MACOSX_BUNDLE
 
 target_include_directories(KarabasFlasher PRIVATE ${CMAKE_BINARY_DIR}/generated)
 
-# 7za встроен в ресурсы (resources.qrc) и распаковывается в рабочую папку
-# при первом запуске - отдельное копирование рядом с бинарником не нужно.
 
 target_link_libraries(KarabasFlasher PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::SerialPort)
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::SerialPort
+    LibArchive::LibArchive)
 
 # Иконка приложения для exe (Windows) и .app-бандла (macOS).
 # Linux использует resources/krb.png через install() ниже.
