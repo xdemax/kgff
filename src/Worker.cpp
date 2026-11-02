@@ -72,8 +72,10 @@ struct AtReply {
 AtReply parseAtLines(const QByteArray& raw) {
     AtReply r;
     const QString text = QString::fromUtf8(raw);
-    const QStringList lines = text.split(QRegularExpression(QStringLiteral("[\\r\\n]+")),
-                                         Qt::SkipEmptyParts);
+    // Регулярка компилируется один раз: parseAtLines вызывается в цикле чтения
+    // примерно каждые 100 мс, и создание QRegularExpression на каждый вызов лишнее.
+    static const QRegularExpression lineSep(QStringLiteral("[\\r\\n]+"));
+    const QStringList lines = text.split(lineSep, Qt::SkipEmptyParts);
     for (const QString& rawLine : lines) {
         const QString line = rawLine.trimmed();
         if (line.isEmpty()) continue;
