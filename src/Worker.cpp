@@ -1586,6 +1586,8 @@ void Worker::doFlash(const Params& p) {
             const QSet<QString> before = Platform::readyRemovableDisks();
             if (!sendMscCommand(p.portLocation, 1)) {
                 emit log(QStringLiteral("Error: Could not switch the device to MSC mode. Aborting."));
+                extraStatus = QStringLiteral("failed");
+                finish();
                 return;
             }
             emit log(QStringLiteral("Waiting for SD Card storage drive to mount..."));
@@ -1593,10 +1595,13 @@ void Worker::doFlash(const Params& p) {
             if (!waitForMountedVolume([&before]() { return Platform::newDisks(before); }, 40000, &sd)) {
                 if (m_cancel.load()) {
                     emit log(QStringLiteral("Operation cancelled by user. The device may stay in MSC mode - replug it."));
+                    extraStatus = QStringLiteral("cancelled");
                 } else {
                     emit log(QStringLiteral("Error: SD card storage drive not detected after switching mode."));
                     emit log(Platform::diagnostics());
+                    extraStatus = QStringLiteral("failed");
                 }
+                finish();
                 return;
             }
             emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
@@ -1619,6 +1624,8 @@ void Worker::doFlash(const Params& p) {
         for (int i = 0; i < 40 && !portFound; ++i) {
             if (!pause(500)) {
                 emit log(QStringLiteral("Operation cancelled by user."));
+                if (p.updateFirmware) fwStatus = QStringLiteral("cancelled");
+                finish();
                 return;
             }
             portFound = isPortPresent(p.portLocation);
@@ -1639,6 +1646,8 @@ void Worker::doFlash(const Params& p) {
             // ERROR_GEN_FAILURE при открытии. Даём устройству "устояться".
             if (!pause(2000)) {
                 emit log(QStringLiteral("Operation cancelled by user."));
+                fwStatus = QStringLiteral("cancelled");
+                finish();
                 return;
             }
         } else {
