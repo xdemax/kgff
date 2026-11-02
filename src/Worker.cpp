@@ -58,6 +58,36 @@ QNetworkRequest makeRequest(const QUrl& url) {
 QString joinPath(const QString& dir, const QString& name) {
     return QDir::cleanPath(dir + QLatin1Char('/') + name);
 }
+
+// Построчный разбор AT-ответа. Прошивка может печатать отладочные строки, в которых
+// встречается слово "error" (например, "no error"), поэтому искать подстроку нельзя:
+// OK, ERROR и +KARABAS: распознаются только как отдельные строки целиком.
+struct AtReply {
+    bool hasKarabas = false;    // есть строка, начинающаяся с "+KARABAS:"
+    bool hasOk = false;         // есть строка "OK"
+    bool hasError = false;      // есть строка "ERROR"
+    QString karabasLine;        // первая строка "+KARABAS:..." (без \r\n)
+};
+
+AtReply parseAtLines(const QByteArray& raw) {
+    AtReply r;
+    const QString text = QString::fromUtf8(raw);
+    const QStringList lines = text.split(QRegularExpression(QStringLiteral("[\\r\\n]+")),
+                                         Qt::SkipEmptyParts);
+    for (const QString& rawLine : lines) {
+        const QString line = rawLine.trimmed();
+        if (line.isEmpty()) continue;
+        if (line.startsWith(QStringLiteral("+KARABAS:"))) {
+            if (!r.hasKarabas) r.karabasLine = line;
+            r.hasKarabas = true;
+        } else if (line.compare(QStringLiteral("OK"), Qt::CaseInsensitive) == 0) {
+            r.hasOk = true;
+        } else if (line.compare(QStringLiteral("ERROR"), Qt::CaseInsensitive) == 0) {
+            r.hasError = true;
+        }
+    }
+    return r;
+}
 }
 
 // ----------------------------------------------------------------------------
@@ -1006,7 +1036,8 @@ bool Worker::sendAtCommand(const QString& portLocation, const QByteArray& cmd,
         if (sp.bytesAvailable() > 0) buf += sp.readAll();
         // Успех (+KARABAS:) проверяем РАНЬШЕ ошибки: отладочная строка прошивки
         // со словом "error" не должна ломать разбор version.
-        if (buf.contains("+KARABAS:")) {
+        const AtReply reply = parseAtLines(buf);
+        if (reply.hasKarabas) {
             // Дочитываем остаток строки, но не дольше 500 мс и с проверкой отмены:
             // поток отладки от устройства не должен зациклить чтение.
             QElapsedTimer drain;
@@ -1017,7 +1048,9 @@ bool Worker::sendAtCommand(const QString& portLocation, const QByteArray& cmd,
             }
             break;
         }
-        if (buf.toLower().contains("error")) break;
+        // Обрываем чтение только на отдельной строке ERROR или OK. Подстроку "error"
+        // не ищем: отладочные строки вроде "no error" не должны прерывать обмен.
+        if (reply.hasError || reply.hasOk) break;
     }
     // Диагностика: сколько байт реально пришло и что именно (для отладки проблем
     // с USB-CDC на Windows). Если buf пуст - устройство не ответило вообще.
@@ -1053,8 +1086,9 @@ bool Worker::sendMscCommand(const QString& portLocation, int mscMode) {
         // Пустой ответ без ошибки открытия/записи - устройство уже перезагрузилось в MSC.
         return true;
     }
+    const AtReply reply = parseAtLines(resp);
     const QString text = QString::fromUtf8(resp).trimmed();
-    if (text.contains(QStringLiteral("ERROR"), Qt::CaseInsensitive)) {
+    if (reply.hasError) {
         emit log("Error: The device rejected the MSC command: " + text +
                  ". Check that the firmware supports this command and the MSC mode number.");
         return false;
@@ -1089,12 +1123,15 @@ bool Worker::queryVersion(const QString& portLocation, QString* raw, int* board)
         }
     }
 
+    const AtReply reply = parseAtLines(resp);
     const QString text = QString::fromUtf8(resp).trimmed();
     if (text.isEmpty()) {
         emit log(QStringLiteral("Error: No response from the device to AT+KARABAS=version."));
         return false;
     }
-    if (text.contains(QStringLiteral("ERROR"), Qt::CaseInsensitive)) {
+    // Успех (+KARABAS:) уже найден в цикле выше, поэтому сюда попадаем только если
+    // его нет. Отдельная строка ERROR означает отказ прошивки.
+    if (reply.hasError) {
         emit log("Error: The device rejected the version command: " + text);
         return false;
     }
