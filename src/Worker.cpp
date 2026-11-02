@@ -1694,20 +1694,34 @@ void Worker::doFlash(const Params& p) {
                     // продолжать бессмысленно. Ведём себя как в ветке ядер.
                     if (p.updateFirmware) {
                         fwStatus = QStringLiteral("not started");
-                        // Подсказка зависит от причины: при отказе MSC-команды устройство
-                        // осталось в обычном режиме, переподключать его не нужно.
-                        if (r.abortReason == QLatin1String("cancelled")) {
-                            // Отмена пользователем - не ошибка, лишнюю подсказку не печатаем.
-                        } else if (r.abortReason == QLatin1String("MSC command failed")) {
+                    }
+                    // Подсказка зависит от причины: при отказе MSC-команды устройство
+                    // осталось в обычном режиме, переподключать его не нужно.
+                    if (r.abortReason == QLatin1String("cancelled")) {
+                        // Отмена пользователем - не ошибка, лишнюю подсказку не печатаем.
+                    } else if (r.abortReason == QLatin1String("MSC command failed")) {
+                        if (p.updateFirmware) {
                             emit log(QStringLiteral("Error: The MSC command failed, so the firmware was not "
                                                     "flashed. The device is still in normal mode; press FLASH "
                                                     "again with only 'Update firmware' checked to finish flashing."));
-                        } else {
+                        }
+                    } else if (r.abortReason == QLatin1String("eject failed")) {
+                        // Плата осталась в MSC-режиме: подсказка нужна независимо от того,
+                        // отмечена ли прошивка, иначе пользователь не знает, что делать.
+                        if (p.updateFirmware) {
                             emit log(QStringLiteral("Error: The MSC session was aborted, so the firmware was not "
                                                     "flashed. The device may stay in MSC mode - replug the Karabas "
                                                     "and press FLASH again with only 'Update firmware' checked to "
                                                     "finish flashing."));
+                        } else {
+                            emit log(QStringLiteral("Error: The device may stay in MSC mode - replug the Karabas "
+                                                    "(unplug and plug the USB cable) to return it to normal mode."));
                         }
+                    } else if (p.updateFirmware) {
+                        emit log(QStringLiteral("Error: The MSC session was aborted, so the firmware was not "
+                                                "flashed. The device may stay in MSC mode - replug the Karabas "
+                                                "and press FLASH again with only 'Update firmware' checked to "
+                                                "finish flashing."));
                     }
                     finish();
                     return;
