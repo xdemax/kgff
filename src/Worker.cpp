@@ -1537,8 +1537,10 @@ Worker::MscResult Worker::copyExtraViaMsc(const QString& portLocation, const QSt
 
     emit log(QStringLiteral("Ejecting SD Card drive from system..."));
     if (!ejectBestEffort(sd)) {
-        emit log(QStringLiteral("Error: The SD card could not be ejected, so the device cannot leave MSC mode by "
-                                "itself. Replug the Karabas (unplug and plug the USB cable)."));
+        // Подсказку про переподключение печатает doFlash (и только если отмечена
+        // прошивка): здесь достаточно сообщить причину, чтобы не дублировать текст.
+        emit log(QStringLiteral("Error: The SD card could not be ejected, so the device cannot leave MSC mode "
+                                "by itself."));
         result.abortReason = QStringLiteral("eject failed");
         return result;
     }
@@ -1679,8 +1681,12 @@ void Worker::doFlash(const Params& p) {
                     extraStatus = QStringLiteral("done");
                 } else if (r.abortReason == QLatin1String("cancelled")) {
                     extraStatus = QStringLiteral("cancelled");
+                } else if (r.abortReason.isEmpty()) {
+                    // Сеанс дошёл до конца, но копирование extra не удалось: перекачивать
+                    // нечего, нужно проверить карту (место, права).
+                    extraStatus = QStringLiteral("failed (copy error)");
                 } else {
-                    // Как и в ветке ядер: сеанс прерван до шага extra.
+                    // Сеанс прерван до шага extra (MSC, ожидание диска, eject).
                     extraStatus = QStringLiteral("failed (session aborted)");
                 }
                 if (!r.abortReason.isEmpty()) {
