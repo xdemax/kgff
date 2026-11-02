@@ -1048,7 +1048,10 @@ bool Worker::resetPortToBootloader(const QString& portLocation) {
     if (portLocation.isEmpty()) return false;
     emit log("Opening port " + portLocation + " to send reboot command to bootloader...");
 
-    const int kAttempts = 10;
+    // После MSC-сеанса Windows перечисляет USB-устройство заново: порт появляется
+    // в списке раньше, чем становится реально открываемым (ERROR_GEN_FAILURE).
+    // Ждём до 30 секунд с шагом 1 секунда - этого хватает на медленных машинах.
+    const int kAttempts = 30;
     QString lastError;
     for (int attempt = 0; attempt < kAttempts; ++attempt) {
         if (m_cancel.load()) {
@@ -1058,7 +1061,7 @@ bool Worker::resetPortToBootloader(const QString& portLocation) {
         if (attempt > 0) {
             emit log(QStringLiteral("Port is not ready yet, retrying 1200 bps reset (%1/%2)...")
                          .arg(attempt + 1).arg(kAttempts));
-            QThread::msleep(500);
+            QThread::msleep(1000);
         }
 
         QSerialPort sp;
@@ -1482,6 +1485,12 @@ void Worker::doFlash(const Params& p) {
         }
         if (portFound) {
             emit log("Port " + p.portLocation + " is back online.");
+            // Порт появился в списке, но Windows может ещё несколько секунд отдавать
+            // ERROR_GEN_FAILURE при открытии. Даём устройству "устояться".
+            if (!pause(2000)) {
+                emit log(QStringLiteral("Operation cancelled by user."));
+                return;
+            }
         } else {
             emit log("Warning: Chosen port " + p.portLocation +
                      " not detected automatically (the device name may have changed). Trying to open directly.");
