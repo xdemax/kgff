@@ -1507,6 +1507,15 @@ void Worker::doFlash(const Params& p) {
         emit log(QStringLiteral("Flash summary: firmware=%1, cores=%2, extra=%3.")
                     .arg(fwStatus, coresStatus, extraStatus));
     };
+    // Все ли запрошенные операции завершились успешно (или были пропущены).
+    // Нужно, чтобы не печатать "Process completed successfully", когда extra=failed.
+    auto allOk = [&]() {
+        auto ok = [](const QString& s) {
+            return s == QLatin1String("skipped") || s == QLatin1String("done") ||
+                   s.startsWith(QLatin1String("done "));
+        };
+        return ok(fwStatus) && ok(coresStatus) && ok(extraStatus);
+    };
     // Единая точка выхода: печатает сводку и возвращает управление.
     auto finish = [&]() { printSummary(); };
     if (p.updateFirmware) {
@@ -1631,7 +1640,9 @@ void Worker::doFlash(const Params& p) {
             portFound = isPortPresent(p.portLocation);
         }
         if (!p.updateFirmware) {
-            if (portFound) {
+            if (!allOk()) {
+                emit log(QStringLiteral("Warning: The operation finished with errors (see the summary below)."));
+            } else if (portFound) {
                 emit log(QStringLiteral("Process completed successfully. The device is back in normal mode."));
             } else {
                 emit log(QStringLiteral("Warning: The operation is complete, but the device port was not detected again. "
@@ -1720,7 +1731,12 @@ void Worker::doFlash(const Params& p) {
     QString err;
     if (copyFileSynced(p.firmwarePath, target, &err)) {
         fwStatus = QStringLiteral("done");
-        emit log(QStringLiteral("Process completed successfully. Device is rebooting with new firmware."));
+        if (allOk()) {
+            emit log(QStringLiteral("Process completed successfully. Device is rebooting with new firmware."));
+        } else {
+            emit log(QStringLiteral("Warning: The firmware was written, but some operations failed "
+                                    "(see the summary below)."));
+        }
     } else {
         // RP2040 перезагружается сразу после записи последнего блока - копирование
         // может сообщить об ошибке, хотя прошивка уже принята.
