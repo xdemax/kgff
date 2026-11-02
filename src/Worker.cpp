@@ -963,6 +963,10 @@ void Worker::doDownload(const Params& p) {
 // ----------------------------------------------------------------------------
 // Последовательный порт
 // ----------------------------------------------------------------------------
+bool Worker::foreignBootloaderPresent(const QString& portLocation) {
+    return isPortPresent(portLocation) && !Platform::bootloaderDisks().isEmpty();
+}
+
 bool Worker::isPortPresent(const QString& portLocation) {
     const QList<QSerialPortInfo> ports = QSerialPortInfo::availablePorts();
     for (const QSerialPortInfo& i : ports) {
@@ -1826,9 +1830,8 @@ void Worker::doFlash(const Params& p) {
                      " not detected automatically (the device name may have changed). Trying to open directly.");
         }
         // Если порт Карабаса ещё жив, а диск RPI-RP2 уже виден, то этот диск принадлежит
-        // ДРУГОЙ RP2040-плате: у живого Карабаса в нормальном режиме RPI-RP2 быть не может.
-        // Прошивка ушла бы на чужую плату, поэтому останавливаемся (не пропускаем сброс).
-        if (isPortPresent(p.portLocation) && !Platform::bootloaderDisks().isEmpty()) {
+        // ДРУГОЙ RP2040-плате. Прошивка ушла бы на чужую плату, поэтому останавливаемся.
+        if (foreignBootloaderPresent(p.portLocation)) {
             emit log(QStringLiteral("Error: Another RP2040 board is in BOOTSEL mode (RPI-RP2 drive is present) "
                                     "while the Karabas port is still alive. Disconnect the other board and "
                                     "press FLASH again."));
@@ -1855,6 +1858,16 @@ void Worker::doFlash(const Params& p) {
             return;
         }
     } else if (!p.portLocation.isEmpty()) {
+        // Та же проверка, что и в ветке после MSC-сеанса: если порт Карабаса ещё жив,
+        // а RPI-RP2 уже виден, то этот диск принадлежит другой RP2040-плате.
+        if (foreignBootloaderPresent(p.portLocation)) {
+            emit log(QStringLiteral("Error: Another RP2040 board is in BOOTSEL mode (RPI-RP2 drive is present) "
+                                    "while the Karabas port is still alive. Disconnect the other board and "
+                                    "press FLASH again."));
+            fwStatus = QStringLiteral("failed (foreign RPI-RP2)");
+            finish();
+            return;
+        }
         // Ветка без MSC-сеанса: имя порта не менялось, поэтому если порт реально исчез
         // (отключили кабель) и RPI-RP2 уже виден, продолжаем без сброса.
         if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {

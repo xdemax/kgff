@@ -98,6 +98,10 @@ private:
     bool queryVersion(const QString& portLocation, QString* raw, int* board);
     bool resetPortToBootloader(const QString& portLocation);
     bool isPortPresent(const QString& portLocation);
+    // true, если порт Карабаса ещё жив, а диск RPI-RP2 уже виден: значит, этот диск
+    // принадлежит ДРУГОЙ RP2040-плате (у живого Карабаса в нормальном режиме RPI-RP2
+    // быть не может). Прошивка ушла бы на чужую плату.
+    bool foreignBootloaderPresent(const QString& portLocation);
 
     bool waitForMountedVolume(const std::function<QList<Platform::Candidate>()>& finder,
                               int timeoutMs, Platform::Candidate* out);
