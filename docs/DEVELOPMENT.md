@@ -48,20 +48,21 @@
 
 Нужны CMake, компилятор C++17 и Qt 6 с модулями Base и SerialPort.
 
-Бинарник `7za` для упаковки входит в репозиторий: `resources/7za/linux/7za`,
-`resources/7za/mac/7za`, `resources/7za/win/7za.exe`. CMake проверяет наличие
-файла для текущей ОС при конфигурации и падает с `7za binary not found`, если
-его нет. При обновлении 7-Zip заменяйте файлы во всех трёх каталогах и
-сохраняйте бит исполнения (`chmod +x resources/7za/linux/7za resources/7za/mac/7za`).
+Распаковка `extra.zip` выполняется библиотекой `minizip-ng`, которая собирается
+автоматически через `FetchContent` (исходники скачиваются с GitHub при первой
+конфигурации и кэшируются в `build/_deps/`). Внешние архиваторы (`7za`, `7z`,
+`libarchive`) не нужны. Для сборки требуется сеть при первой конфигурации CMake;
+если `zlib` не найден в системе (типично для Windows), он тоже скачивается через
+`FetchContent`.
 
 ### Linux
 
 Debian / Ubuntu:
 
-    sudo apt install build-essential cmake qt6-base-dev qt6-serialport-dev udisks2 eject
+    sudo apt install build-essential cmake qt6-base-dev qt6-serialport-dev udisks2 eject zlib1g-dev
 
-Fedora: `sudo dnf install gcc-c++ cmake qt6-qtbase-devel qt6-qtserialport-devel udisks2`
-Arch:   `sudo pacman -S base-devel cmake qt6-base qt6-serialport udisks2`
+Fedora: `sudo dnf install gcc-c++ cmake qt6-qtbase-devel qt6-qtserialport-devel udisks2 zlib-devel`
+Arch:   `sudo pacman -S base-devel cmake qt6-base qt6-serialport udisks2 zlib`
 
     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
     cmake --build build -j
@@ -88,6 +89,8 @@ Arch:   `sudo pacman -S base-devel cmake qt6-base qt6-serialport udisks2`
 универсального Qt. Без подписи и нотаризации Gatekeeper блокирует первый запуск: откройте
 приложение через «Системные настройки - Конфиденциальность и безопасность - Всё равно открыть».
 Начиная с macOS Ventura система может запросить доступ к съёмным томам.
+
+`minizip-ng` и `zlib` собираются через `FetchContent`; отдельно ставить их не нужно.
 
 Ключ `--log` включает запись лога в файл: `~/.local/share/KarabasFlasher/flasher_log.txt` (Linux),
 `%APPDATA%\KarabasFlasher\flasher_log.txt` (Windows), `~/Library/Application Support/KarabasFlasher/` (macOS).
@@ -125,7 +128,9 @@ LGPL-3.0 (подключается динамически; подробност�
 GitHub (`git init && git add . && git commit -m init && git push`), откройте вкладку **Actions** -
 сборка запустится сама. Готовые файлы лежат в разделе **Artifacts** завершённого запуска:
 `KarabasFlasher-macos` (.dmg, universal arm64 + Intel), `KarabasFlasher-windows` (zip с DLL Qt),
-`KarabasFlasher-linux` (бинарник; нужен системный Qt). Заодно это проверка компиляции на всех системах.
+`KarabasFlasher-linux-ubuntu24.04` (.deb), `KarabasFlasher-appimage` (AppImage с Qt внутри).
+Заодно это проверка компиляции на всех системах. `minizip-ng` и `zlib` собираются через
+`FetchContent` прямо в CI, поэтому отдельные пакеты для них не нужны.
 
 Сборки не подписаны. На macOS скачанный из браузера `.dmg` получает карантин: после перетаскивания в
 «Программы» выполните `xattr -dr com.apple.quarantine /Applications/KarabasFlasher.app`
@@ -181,6 +186,22 @@ GitHub (`git init && git add . && git commit -m init && git push`), открой
 готовым носителем, а SD - это диск, у которого носитель появился после команды. Загрузчик
 RP2040 ищется по метке `RPI-RP2`. Если подходящих дисков несколько, программа останавливается
 с сообщением, а не угадывает.
+
+## Дополнительный контент (`extra.zip`)
+
+Архив `extra.zip` скачивается с GitHub и распаковывается встроенной библиотекой `minizip-ng`
+(собирается через `FetchContent`). Внешние архиваторы не используются. При распаковке:
+
+- проверяется CRC каждого файла (`mz_zip_reader_entry_close`) и целостность каталога
+  (`MZ_END_OF_LIST`);
+- считается фактически записанный объём (лимит 2 ГБ), а не только заявленный в каталоге;
+- проверяется свободное место в кэше перед распаковкой;
+- имена с компонентом `..`, абсолютные пути и обратные слеши отсекаются;
+- симлинки из архива не копируются на SD-карту.
+
+Содержимое верхней папки `extra/` (если она есть в архиве) копируется в корень SD-карты без
+вложенной папки. Остальные элементы корня копируются как есть. Файлы, которых нет в архиве,
+на карте не трогаются.
 
 ## Диагностика
 
