@@ -1588,6 +1588,9 @@ void Worker::doFlash(const Params& p) {
                 }
             }
             if (!r.abortReason.isEmpty()) {
+                // Сеанс прерван до записи прошивки: "pending" вводит в заблуждение,
+                // прошивка фактически не начиналась.
+                if (p.updateFirmware) fwStatus = QStringLiteral("not started");
                 finish();
                 return;
             }
@@ -1620,6 +1623,7 @@ void Worker::doFlash(const Params& p) {
                         finish();
                         return;
                     }
+                    fwStatus = QStringLiteral("not started");
                 } else {
                     emit log(QStringLiteral("Waiting for SD Card storage drive to mount..."));
                     Platform::Candidate sd;
@@ -1636,6 +1640,7 @@ void Worker::doFlash(const Params& p) {
                             finish();
                             return;
                         }
+                        fwStatus = QStringLiteral("not started");
                     } else {
                         emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
                         const bool extraOk = copyExtraToSd(extraFilesDir, sd.mountPoint);
@@ -1651,6 +1656,7 @@ void Worker::doFlash(const Params& p) {
                                 finish();
                                 return;
                             }
+                            fwStatus = QStringLiteral("not started");
                         }
                     }
                 }
