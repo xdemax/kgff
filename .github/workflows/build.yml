@@ -29,15 +29,11 @@ jobs:
           modules: qtserialport
           cache: true
 
-      - name: Install libarchive
-        run: brew install libarchive
-
       - name: Configure
         run: |
-          LIBARCHIVE_PREFIX="$(brew --prefix libarchive)"
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_PREFIX_PATH="$LIBARCHIVE_PREFIX"
+            -DCMAKE_PREFIX_PATH="/usr"
 
       - name: Build
         run: cmake --build build --parallel
@@ -72,17 +68,10 @@ jobs:
           modules: qtserialport
           cache: true
 
-      - name: Install libarchive via vcpkg
-        shell: pwsh
-        run: |
-          vcpkg install libarchive:x64-windows
-          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
-
       - name: Configure
         shell: pwsh
         run: |
-          cmake -S . -B build -A x64 `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake -S . -B build -A x64
 
       - name: Build
         run: cmake --build build --config Release --parallel
