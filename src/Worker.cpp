@@ -1392,7 +1392,11 @@ Worker::MscResult Worker::updateCoresOnSd(const ModelInfo& m, const QString& por
         }
         return result;
     }
-    emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
+    emit log(QStringLiteral("Found SD Card drive: %1 [%2] (%3), size %4 MB")
+                 .arg(sd.mountPoint,
+                      sd.label.isEmpty() ? QStringLiteral("(no label)") : sd.label,
+                      sd.node,
+                      QString::number(QStorageInfo(sd.mountPoint).bytesTotal() / (1024 * 1024))));
 
     // Проверка «тот ли это диск»: при отказе не извлекаем чужую флешку, только
     // возвращаем abortReason - общая ветка в doFlash подскажет переподключить Карабас.
@@ -1569,7 +1573,11 @@ Worker::MscResult Worker::copyExtraViaMsc(const QString& portLocation, const QSt
         }
         return result;
     }
-    emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
+    emit log(QStringLiteral("Found SD Card drive: %1 [%2] (%3), size %4 MB")
+                 .arg(sd.mountPoint,
+                      sd.label.isEmpty() ? QStringLiteral("(no label)") : sd.label,
+                      sd.node,
+                      QString::number(QStorageInfo(sd.mountPoint).bytesTotal() / (1024 * 1024))));
 
     // Проверка «тот ли это диск»: при отказе не извлекаем чужую флешку.
     if (!confirmDrive(sd)) {
@@ -1883,7 +1891,9 @@ void Worker::doFlash(const Params& p) {
         finish();
         return;
     }
-    emit log("Target drive found: " + boot.mountPoint + " [RPI-RP2] (" + boot.node + ")");
+    emit log(QStringLiteral("Target drive found: %1 [RPI-RP2] (%2), size %3 MB")
+                 .arg(boot.mountPoint, boot.node,
+                      QString::number(QStorageInfo(boot.mountPoint).bytesTotal() / (1024 * 1024))));
 
     // ---- Запись прошивки: не прерывается ----
     const QString target = joinPath(boot.mountPoint, QStringLiteral("firmware.uf2"));
