@@ -1283,6 +1283,44 @@ bool Worker::waitForMountedVolume(const std::function<QList<Platform::Candidate>
     return false;
 }
 
+bool Worker::confirmDrive(const Platform::Candidate& c) {
+    if (c.mountPoint.isEmpty()) return false;
+
+    // Признаки Карабаса: ядра .kg1/.kg2/.kg3 в корне или папка backup_*.
+    if (isKarabasVolume(c.mountPoint)) return true;
+
+    // Список файлов и папок в корне (без служебных ._* от macOS).
+    const QDir dir(c.mountPoint);
+    const QFileInfoList entries = dir.entryInfoList(
+        QDir::Files | QDir::Dirs | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
+    QStringList names;
+    for (const QFileInfo& fi : entries) {
+        if (fi.fileName().startsWith(QLatin1String("._"))) continue;
+        names << fi.fileName();
+    }
+
+    const qint64 bytesTotal = QStorageInfo(c.mountPoint).bytesTotal();
+    const QString labelPart = c.label.isEmpty() ? QStringLiteral("(no label)") : c.label;
+
+    if (names.isEmpty()) {
+        // Чистая карта: писать можно, но предупредим - вдруг это чужая пустая флешка.
+        emit log(QStringLiteral("Warning: The drive %1 [%2] (%3) has no Karabas markers (no .kg* cores "
+                                "and no backup_* folder). It looks like an empty card; continuing.")
+                     .arg(c.node, labelPart, QString::number(bytesTotal / (1024 * 1024)) + QStringLiteral(" MB")));
+        return true;
+    }
+
+    // Файлы есть, признаков Карабаса нет - спрашиваем пользователя.
+    bool accepted = false;
+    emit confirmUnrecognizedDrive(c.node, labelPart, bytesTotal, names.mid(0, 10), &accepted);
+    if (!accepted) {
+        emit log(QStringLiteral("Error: The drive %1 [%2] was not confirmed as the Karabas SD card. "
+                                "Nothing was written to it.")
+                     .arg(c.node, labelPart));
+    }
+    return accepted;
+}
+
 void Worker::cleanupVolumeJunk(const QString& root, const QString& backupDir) {
     QStringList extraDirs;
     if (QFileInfo(backupDir).isDir()) extraDirs << backupDir;
@@ -1355,6 +1393,13 @@ Worker::MscResult Worker::updateCoresOnSd(const ModelInfo& m, const QString& por
         return result;
     }
     emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
+
+    // Проверка «тот ли это диск»: при отказе не извлекаем чужую флешку, только
+    // возвращаем abortReason - общая ветка в doFlash подскажет переподключить Карабас.
+    if (!confirmDrive(sd)) {
+        result.abortReason = QStringLiteral("unrecognized drive");
+        return result;
+    }
 
     // ---- Дальше отмена не проверяется: операции над SD доводятся до конца ----
     const QString root = sd.mountPoint;
@@ -1525,6 +1570,12 @@ Worker::MscResult Worker::copyExtraViaMsc(const QString& portLocation, const QSt
         return result;
     }
     emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
+
+    // Проверка «тот ли это диск»: при отказе не извлекаем чужую флешку.
+    if (!confirmDrive(sd)) {
+        result.abortReason = QStringLiteral("unrecognized drive");
+        return result;
+    }
 
     result.extraDownloaded = true;
     result.extraOk = copyExtraToSd(extraFilesDir, sd.mountPoint);

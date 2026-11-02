@@ -48,6 +48,12 @@ signals:
     void openFolder(const QString& path);               // открыть папку в файловом менеджере
     void modelDetected(int modelIndex, const QString& raw); // ответ на AT+KARABAS=version
     void portsChanged();                                // список портов мог измениться (MSC, сброс)
+    // Запрос подтверждения записи на диск без признаков Карабаса. Отправляется из
+    // рабочего потока через Qt::BlockingQueuedConnection: GUI показывает диалог и
+    // записывает ответ в *accepted. Если соединение не установлено, accepted остаётся
+    // false (безопасное поведение - отказ).
+    void confirmUnrecognizedDrive(const QString& node, const QString& label, qint64 bytesTotal,
+                                  const QStringList& sampleFiles, bool* accepted);
 
 private:
     struct HttpResult {
@@ -95,6 +101,12 @@ private:
 
     bool waitForMountedVolume(const std::function<QList<Platform::Candidate>()>& finder,
                               int timeoutMs, Platform::Candidate* out);
+
+    // Проверка «тот ли это диск» перед записью. Возвращает true, если можно писать:
+    //   - на диске есть признаки Карабаса (ядра .kg* или папка backup_*) - без вопросов;
+    //   - диск пустой (чистая карта) - с предупреждением в лог;
+    //   - файлы есть, но признаков нет - спрашивает пользователя через сигнал.
+    bool confirmDrive(const Platform::Candidate& c);
 
     // Результат MSC-сеанса: ядра и extra обновляются в одном сеансе, но их статусы
     // независимы. abortReason непустой, если сеанс прерван до записи (сводка всё равно печатается).

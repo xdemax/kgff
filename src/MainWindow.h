@@ -38,6 +38,8 @@ private slots:
     void onWorkerFinished();
     void onPortAccessDenied(const QString& portLocation);
     void onOpenFolder(const QString& path);
+    void onConfirmUnrecognizedDrive(const QString& node, const QString& label, qint64 bytesTotal,
+                                    const QStringList& sampleFiles, bool* accepted);
 
 private:
     Params collectParams() const;

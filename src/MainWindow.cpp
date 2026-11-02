@@ -192,6 +192,9 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     connect(m_worker, &Worker::finished, this, &MainWindow::onWorkerFinished);
     connect(m_worker, &Worker::portAccessDenied, this, &MainWindow::onPortAccessDenied);
     connect(m_worker, &Worker::openFolder, this, &MainWindow::onOpenFolder);
+    // BlockingQueuedConnection: рабочий поток ждёт ответа пользователя, GUI показывает диалог.
+    connect(m_worker, &Worker::confirmUnrecognizedDrive, this, &MainWindow::onConfirmUnrecognizedDrive,
+            Qt::BlockingQueuedConnection);
     m_thread->start();
 
     connect(m_downloadBtn, &QPushButton::clicked, this, &MainWindow::onDownload);
@@ -447,6 +450,28 @@ void MainWindow::onOpenFolder(const QString& path) {
     if (!openInFileManager(path)) {
         appendLog("Warning: Could not open the file manager automatically. Open the folder manually: " + path);
     }
+}
+
+void MainWindow::onConfirmUnrecognizedDrive(const QString& node, const QString& label, qint64 bytesTotal,
+                                            const QStringList& sampleFiles, bool* accepted) {
+    if (accepted) *accepted = false;        // безопасное поведение по умолчанию
+
+    QStringList files = sampleFiles;
+    if (files.size() > 10) files = files.mid(0, 10);
+    const QString filesText = files.isEmpty() ? tr("(no files)") : files.join(QStringLiteral(", "));
+    const QString sizeText = QString::number(bytesTotal / (1024 * 1024)) + QStringLiteral(" MB");
+
+    const auto r = QMessageBox::warning(
+        this, QStringLiteral("Karabas Flasher"),
+        tr("The drive %1 [%2] (%3) does not look like the Karabas SD card:\n"
+           "no .kg1/.kg2/.kg3 cores and no backup_* folder were found.\n\n"
+           "Files in the root: %4\n\n"
+           "Writing to this drive will replace files on it. Continue?")
+            .arg(node, label, sizeText, filesText),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (accepted) *accepted = (r == QMessageBox::Yes);
+    appendLog(QStringLiteral("User %1 writing to unrecognized drive %2.")
+                  .arg(r == QMessageBox::Yes ? QStringLiteral("confirmed") : QStringLiteral("declined"), node));
 }
 
 void MainWindow::onFirmwareReady(const QString& path) {
