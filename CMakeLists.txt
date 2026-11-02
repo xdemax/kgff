@@ -85,7 +85,7 @@ target_include_directories(KarabasFlasher PRIVATE
 
 target_link_libraries(KarabasFlasher PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::SerialPort
-    minizip-ng)
+    minizip)
 
 # Иконка приложения для exe (Windows) и .app-бандла (macOS).
 # Linux использует resources/krb.png через install() ниже.
