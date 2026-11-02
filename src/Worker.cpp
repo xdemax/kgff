@@ -1049,32 +1049,56 @@ bool Worker::queryVersion(const QString& portLocation, QString* raw, int* board)
     return true;
 }
 
-// Сброс 1200 bps для перехода в режим RP2040 bootloader
+// Сброс 1200 bps для перехода в режим RP2040 bootloader.
+// После MSC-сеанса устройство перечисляется заново, и Windows может ещё несколько
+// секунд отдавать ERROR_GEN_FAILURE ("Присоединенное к системе устройство не работает")
+// при открытии порта. Поэтому делаем несколько попыток с паузой.
 bool Worker::resetPortToBootloader(const QString& portLocation) {
     if (portLocation.isEmpty()) return false;
     emit log("Opening port " + portLocation + " to send reboot command to bootloader...");
 
-    QSerialPort sp;
-    sp.setPortName(portLocation);
-    sp.setBaudRate(1200);
-    if (!sp.open(QIODevice::ReadWrite)) {
-        emit log("Failed to open port " + portLocation + " for 1200 bps reset: " + sp.errorString());
-        m_portOpenFailed = true;
-#if defined(Q_OS_LINUX)
-        if (sp.error() == QSerialPort::PermissionError) {
-            m_permissionDenied = true;
-            emit portAccessDenied(portLocation);
+    const int kAttempts = 10;
+    QString lastError;
+    for (int attempt = 0; attempt < kAttempts; ++attempt) {
+        if (m_cancel.load()) {
+            emit log(QStringLiteral("Operation cancelled by user."));
+            return false;
         }
-#endif
-        return false;
-    }
-    sp.setDataTerminalReady(true);
-    QThread::msleep(50);
-    sp.setDataTerminalReady(false);
-    sp.close();
+        if (attempt > 0) {
+            emit log(QStringLiteral("Port is not ready yet, retrying 1200 bps reset (%1/%2)...")
+                         .arg(attempt + 1).arg(kAttempts));
+            QThread::msleep(500);
+        }
 
-    emit log("Reset 1200 bps signal sent to " + portLocation + ".");
-    return true;
+        QSerialPort sp;
+        sp.setPortName(portLocation);
+        sp.setBaudRate(1200);
+        if (!sp.open(QIODevice::ReadWrite)) {
+            lastError = sp.errorString();
+            // Нет прав - повторять бессмысленно, сразу сообщаем пользователю.
+            if (sp.error() == QSerialPort::PermissionError) {
+                m_portOpenFailed = true;
+                m_permissionDenied = true;
+#if defined(Q_OS_LINUX)
+                emit portAccessDenied(portLocation);
+#endif
+                emit log("Failed to open port " + portLocation + " for 1200 bps reset: " + lastError);
+                return false;
+            }
+            continue;
+        }
+        sp.setDataTerminalReady(true);
+        QThread::msleep(50);
+        sp.setDataTerminalReady(false);
+        sp.close();
+
+        emit log("Reset 1200 bps signal sent to " + portLocation + ".");
+        return true;
+    }
+
+    m_portOpenFailed = true;
+    emit log("Failed to open port " + portLocation + " for 1200 bps reset: " + lastError);
+    return false;
 }
 
 // ----------------------------------------------------------------------------
