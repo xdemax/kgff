@@ -1004,7 +1004,7 @@ bool Worker::sendAtCommand(const QString& portLocation, const QByteArray& cmd,
             }
             break;
         }
-        if (buf.contains("ERROR", Qt::CaseInsensitive)) break;
+        if (buf.indexOf("ERROR", 0, Qt::CaseInsensitive) >= 0) break;
     }
     // Диагностика: сколько байт реально пришло и что именно (для отладки проблем
     // с USB-CDC на Windows). Если buf пуст - устройство не ответило вообще.
