@@ -124,19 +124,27 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
         return false;
     }
 
-    const qint64 limit = 2LL * 1024 * 1024 * 1024;      // 2 ГБ
-    qint64 total = 0;
+    const qint64 hardLimit = 2LL * 1024 * 1024 * 1024;  // 2 ГБ - абсолютный предел
+    const qint64 reserve = 64LL * 1024 * 1024;          // запас на служебные нужды
+    qint64 limit = hardLimit;
+    qint64 total = 0;                                   // заявленные размеры (для оценки)
+    qint64 writtenTotal = 0;                            // фактически записанные байты
     int extracted = 0;
     bool failed = false;
 
     // Проверка свободного места в кэше: распаковка не должна забить диск.
-    // Запас 64 МБ на служебные нужды; если размер неизвестен (bytesAvailable < 0) - пропускаем.
+    // Эффективный лимит - min(2 ГБ, свободно - запас): даже при вранье в каталоге
+    // архив не сможет выйти за пределы свободного места. Если размер неизвестен
+    // (bytesAvailable < 0) - оставляем только абсолютный предел.
     const qint64 cacheFree = QStorageInfo(outDir).bytesAvailable();
-    if (cacheFree >= 0 && cacheFree < 64LL * 1024 * 1024) {
-        emit log("Error: Not enough free space in the cache folder for extra content (available " +
-                 QString::number(cacheFree / 1024) + " KB). Aborting extraction.");
-        mz_zip_reader_delete(&reader);
-        return false;
+    if (cacheFree >= 0) {
+        if (cacheFree < reserve) {
+            emit log("Error: Not enough free space in the cache folder for extra content (available " +
+                     QString::number(cacheFree / 1024) + " KB). Aborting extraction.");
+            mz_zip_reader_delete(&reader);
+            return false;
+        }
+        limit = std::min(hardLimit, cacheFree - reserve);
     }
 
     // Безопасность пути: имя не должно содержать компонент ".." (а не подстроку "..",
@@ -201,21 +209,21 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
 
         char buf[64 * 1024];
         int32_t n = 0;
-        qint64 written = 0;
         bool writeFailed = false;
+        bool limitHit = false;
         while ((n = mz_zip_reader_entry_read(reader, buf, sizeof(buf))) > 0) {
             if (out.write(buf, n) != n) {
                 emit log("Warning: Write error for " + rel + ": " + out.errorString());
                 writeFailed = true;
                 break;
             }
-            written += n;
-            // Фактически записанные байты тоже считаем: заявленный размер из каталога
-            // может врать, а распаковка не должна выйти за лимит.
-            if (total - info->uncompressed_size + written > limit) {
+            // Считаем ФАКТИЧЕСКИ записанные байты по всем файлам: заявленный размер
+            // из каталога может врать, а распаковка не должна выйти за лимит.
+            writtenTotal += n;
+            if (writtenTotal > limit) {
                 emit log("Error: The extra archive expands to more than " +
                          QString::number(limit / (1024 * 1024)) + " MB. Aborting extraction.");
-                writeFailed = true;
+                limitHit = true;
                 break;
             }
         }
@@ -223,6 +231,11 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
         // mz_zip_reader_entry_close возвращает ошибку CRC/распаковки - именно здесь
         // обнаруживается битый или подменённый файл.
         const int closeErr = mz_zip_reader_entry_close(reader);
+        if (limitHit) {
+            // Превышение лимита - прерываем весь цикл, а не переходим к следующей записи.
+            failed = true;
+            break;
+        }
         if (writeFailed) {
             failed = true;
         } else if (n < 0) {
