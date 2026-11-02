@@ -171,6 +171,8 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
         if (cacheFree < reserve) {
             emit log("Error: Not enough free space in the cache folder for extra content (available " +
                      QString::number(cacheFree / 1024) + " KB). Aborting extraction.");
+            // Архив уже открыт - закрываем его явно перед удалением читателя.
+            mz_zip_reader_close(reader);
             mz_zip_reader_delete(&reader);
             return false;
         }
