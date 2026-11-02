@@ -17,13 +17,32 @@ if(NOT Qt6_FOUND)
 endif()
 
 # libarchive: распаковка extra.7z без внешнего 7za (BSD-2-Clause, есть во всех дистрибутивах).
+# Сначала штатный FindLibArchive из CMake, затем запасной путь через pkg-config:
+# в некоторых окружениях (CI, Homebrew на macOS, минимальные образы) модуль CMake
+# не находит библиотеку, хотя libarchive.pc присутствует.
 find_package(LibArchive QUIET)
+if(NOT LibArchive_FOUND)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(LibArchive_PC QUIET libarchive)
+    endif()
+    if(LibArchive_PC_FOUND)
+        add_library(LibArchive::LibArchive UNKNOWN IMPORTED)
+        set_target_properties(LibArchive::LibArchive PROPERTIES
+            IMPORTED_LOCATION "${LibArchive_PC_LINK_LIBRARIES}"
+            INTERFACE_INCLUDE_DIRECTORIES "${LibArchive_PC_INCLUDE_DIRS}"
+            INTERFACE_LINK_LIBRARIES "${LibArchive_PC_LIBRARIES}")
+        set(LibArchive_FOUND TRUE)
+    endif()
+endif()
 if(NOT LibArchive_FOUND)
     message(FATAL_ERROR
         "libarchive was not found.\n"
-        "  Ubuntu/Debian: sudo apt install libarchive-dev\n"
-        "  Fedora:        sudo dnf install libarchive-devel\n"
-        "  Arch/Manjaro:  sudo pacman -S libarchive")
+        "  Ubuntu/Debian: sudo apt install libarchive-dev pkg-config\n"
+        "  Fedora:        sudo dnf install libarchive-devel pkgconf\n"
+        "  Arch/Manjaro:  sudo pacman -S libarchive pkgconf\n"
+        "  macOS:         brew install libarchive pkg-config\n"
+        "  Windows:       vcpkg install libarchive:x64-windows")
 endif()
 
 # Версия: номер из project(... VERSION) + описание из git (тег, число коммитов, хэш, -dirty).
