@@ -1715,6 +1715,12 @@ void Worker::doFlash(const Params& p) {
                 // Сеанс прерван до записи прошивки: "pending" вводит в заблуждение,
                 // прошивка фактически не начиналась.
                 if (p.updateFirmware) fwStatus = QStringLiteral("not started");
+                // При отказе от неопознанного диска плата осталась в MSC-режиме:
+                // подсказка нужна независимо от того, отмечена ли прошивка.
+                if (r.abortReason == QLatin1String("unrecognized drive")) {
+                    emit log(QStringLiteral("Error: The device may stay in MSC mode - replug the Karabas "
+                                            "(unplug and plug the USB cable) to return it to normal mode."));
+                }
                 finish();
                 return;
             }
@@ -1768,7 +1774,8 @@ void Worker::doFlash(const Params& p) {
                                                     "flashed. The device is still in normal mode; press FLASH "
                                                     "again with only 'Update firmware' checked to finish flashing."));
                         }
-                    } else if (r.abortReason == QLatin1String("eject failed")) {
+                    } else if (r.abortReason == QLatin1String("eject failed") ||
+                               r.abortReason == QLatin1String("unrecognized drive")) {
                         // Плата осталась в MSC-режиме: подсказка нужна независимо от того,
                         // отмечена ли прошивка, иначе пользователь не знает, что делать.
                         if (p.updateFirmware) {
