@@ -1817,9 +1817,18 @@ void Worker::doFlash(const Params& p) {
             emit log("Warning: Chosen port " + p.portLocation +
                      " not detected automatically (the device name may have changed). Trying to open directly.");
         }
+        // Если порт Карабаса ещё жив, а диск RPI-RP2 уже виден, то этот диск принадлежит
+        // ДРУГОЙ RP2040-плате: у живого Карабаса в нормальном режиме RPI-RP2 быть не может.
+        // Прошивка ушла бы на чужую плату, поэтому останавливаемся (не пропускаем сброс).
+        if (isPortPresent(p.portLocation) && !Platform::bootloaderDisks().isEmpty()) {
+            emit log(QStringLiteral("Error: Another RP2040 board is in BOOTSEL mode (RPI-RP2 drive is present) "
+                                    "while the Karabas port is still alive. Disconnect the other board and "
+                                    "press FLASH again."));
+            fwStatus = QStringLiteral("failed (foreign RPI-RP2)");
+            finish();
+            return;
+        }
         // Сначала пробуем сброс: если порт Карабаса живой, он всегда должен сработать.
-        // Проверка bootloaderDisks() до сброса опасна: если рядом в BOOTSEL лежит другая
-        // RP2040-плата (Pico и т.п.), сброс будет пропущен, и прошивка уйдёт на чужую плату.
         // В ветке с MSC-сеансом имя порта могло измениться, поэтому продолжать без сброса
         // нельзя: рядом в BOOTSEL может оказаться чужая плата. Прерываемся с подсказкой.
         if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
