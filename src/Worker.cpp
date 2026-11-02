@@ -1567,9 +1567,13 @@ void Worker::doFlash(const Params& p) {
             coresStatus = r.coresOk ? QStringLiteral("done") : QStringLiteral("failed");
             if (p.updateExtra) {
                 if (!r.extraAttempted) {
-                    extraStatus = QStringLiteral("failed (not downloaded)");
+                    // Сеанс прервался до шага extra (ядра/бэкап/eject) - extra не трогали.
+                    extraStatus = QStringLiteral("failed (session aborted)");
                 } else {
-                    extraStatus = r.extraOk ? QStringLiteral("done") : QStringLiteral("failed");
+                    // extraAttempted == true: шаг extra выполнялся, но набор не был скачан
+                    // (или копирование не удалось) - это и есть "not downloaded".
+                    extraStatus = r.extraOk ? QStringLiteral("done")
+                                            : QStringLiteral("failed (not downloaded)");
                 }
             }
             if (!r.abortReason.isEmpty()) {
