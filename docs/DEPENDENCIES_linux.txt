@@ -34,6 +34,8 @@ Arch/Manjaro: пакет собирается командой makepkg -si в к
 ЧТО ДЛЯ ЧЕГО
 ------------
 Qt 6 (Core, Gui, Widgets, Network, SerialPort)   окно, сеть, последовательный порт
+libarchive (libarchive-dev)                       распаковка extra.7z
+pkg-config                                        поиск libarchive при сборке из исходников
 udisks2 (udisksd, udisksctl)                      монтирование и извлечение SD-карты
 gdbus (пакет glib) или busctl (systemd)           вызов извлечения носителя (Drive.Eject)
 systemd-logind                                    выдача доступа к порту (тег uaccess)
@@ -53,7 +55,7 @@ UBUNTU / DEBIAN / LINUX MINT
 Обязательно:
 
     sudo apt install libqt6widgets6 libqt6network6 libqt6serialport6 \
-                     udisks2 libglib2.0-bin ca-certificates libssl3
+                     libarchive13 udisks2 libglib2.0-bin ca-certificates libssl3
 
 Желательно:
 
@@ -73,7 +75,7 @@ FEDORA
 ------
 Обязательно:
 
-    sudo dnf install qt6-qtbase-gui qt6-qtserialport udisks2 glib2 openssl-libs ca-certificates
+    sudo dnf install qt6-qtbase-gui qt6-qtserialport libarchive udisks2 glib2 openssl-libs ca-certificates
 
 Желательно:
 
@@ -90,7 +92,7 @@ ARCH / MANJARO / ENDEAVOUROS
 ----------------------------
 Обязательно:
 
-    sudo pacman -S --needed qt6-base qt6-serialport udisks2 glib2 openssl ca-certificates
+    sudo pacman -S --needed qt6-base qt6-serialport libarchive udisks2 glib2 openssl ca-certificates
 
 Желательно:
 
@@ -128,6 +130,7 @@ ARCH / MANJARO / ENDEAVOUROS
 БЫСТРАЯ ПРОВЕРКА, ЧТО ВСЁ УСТАНОВЛЕНО
 -------------------------------------
     command -v udisksctl gdbus busctl pkexec eject
+    ldconfig -p | grep -q libarchive && echo "libarchive: ok"
     systemctl status udisks2 --no-pager | head -3
     loginctl show-session $XDG_SESSION_ID -p Active
 
