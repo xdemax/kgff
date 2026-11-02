@@ -40,8 +40,18 @@ set(MZ_WZAES OFF CACHE BOOL "" FORCE)
 set(MZ_OPENSSL OFF CACHE BOOL "" FORCE)
 set(MZ_LIBBSD OFF CACHE BOOL "" FORCE)
 set(MZ_ICONV OFF CACHE BOOL "" FORCE)
-# Если zlib нет в системе (Windows, минимальные образы) - скачать и собрать.
-set(MZ_FETCH_LIBS ON CACHE BOOL "" FORCE)
+# zlib: на Linux/macOS обычно есть в системе, на Windows - нет. Скачиваем явно,
+# чтобы minizip-ng не полагался на свой MZ_FETCH_LIBS (он тянет ещё bzip2/lzma/zstd).
+find_package(ZLIB QUIET)
+if(NOT ZLIB_FOUND)
+    FetchContent_Declare(zlib
+        GIT_REPOSITORY https://github.com/madler/zlib.git
+        GIT_TAG        v1.3.1
+        GIT_SHALLOW    TRUE)
+    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(zlib)
+endif()
+set(MZ_FETCH_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(minizip-ng
     GIT_REPOSITORY https://github.com/zlib-ng/minizip-ng.git
     GIT_TAG        4.0.7
