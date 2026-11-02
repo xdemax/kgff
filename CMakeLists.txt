@@ -51,7 +51,10 @@ if(NOT ZLIB_FOUND)
     set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(zlib)
 endif()
+# MZ_FETCH_LIBS должен быть OFF ДО FetchContent_MakeAvailable(minizip-ng):
+# иначе clone-repo.cmake попытается клонировать bzip2/lzma/zstd с их git-серверов.
 set(MZ_FETCH_LIBS OFF CACHE BOOL "" FORCE)
+set(MZ_FORCE_FETCH_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(minizip-ng
     GIT_REPOSITORY https://github.com/zlib-ng/minizip-ng.git
     GIT_TAG        4.0.7
