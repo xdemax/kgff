@@ -1590,7 +1590,17 @@ void Worker::doFlash(const Params& p) {
                 return;
             }
         } else {
-            // Только extra: открываем MSC и копируем.
+            // Только extra: сначала проверяем, что архив скачан и распакован.
+            // Иначе MSC-сеанс (две перезагрузки устройства) запускается впустую,
+            // и только copyExtraToSd сообщает об ошибке.
+            if (!QFile::exists(extraDir + "/" + kExtraCompleteMarker) || !QFileInfo(extraFilesDir).isDir()) {
+                emit log(QStringLiteral("Error: No downloaded extra content found. Check 'Download extra content' "
+                                        "and press 'Download via GitHub' to fetch it."));
+                extraStatus = QStringLiteral("failed (not downloaded)");
+                finish();
+                return;
+            }
+            // Открываем MSC и копируем.
             emit log(QStringLiteral("Switching Karabas to SD Card MSC mode (card 1) for extra content..."));
             const QSet<QString> before = Platform::readyRemovableDisks();
             if (!sendMscCommand(p.portLocation, 1)) {
