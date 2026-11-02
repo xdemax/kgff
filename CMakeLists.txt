@@ -29,6 +29,19 @@ set(MZ_ENABLE_WERROR OFF CACHE BOOL "" FORCE)
 set(MZ_PKGCONFIG_INSTALLDIR "" CACHE STRING "" FORCE)
 set(MZ_CMAKE_INSTALLDIR "" CACHE STRING "" FORCE)
 set(MZ_INSTALL OFF CACHE BOOL "" FORCE)
+# Для распаковки ZIP достаточно zlib. Остальные компрессоры (bzip2, lzma, zstd)
+# и шифрование (openssl) отключаем: на Windows/macOS их может не быть в системе,
+# а minizip-ng без MZ_FETCH_LIBS падает на конфигурации.
+set(MZ_BZIP2 OFF CACHE BOOL "" FORCE)
+set(MZ_LZMA OFF CACHE BOOL "" FORCE)
+set(MZ_ZSTD OFF CACHE BOOL "" FORCE)
+set(MZ_PKCRYPT OFF CACHE BOOL "" FORCE)
+set(MZ_WZAES OFF CACHE BOOL "" FORCE)
+set(MZ_OPENSSL OFF CACHE BOOL "" FORCE)
+set(MZ_LIBBSD OFF CACHE BOOL "" FORCE)
+set(MZ_ICONV OFF CACHE BOOL "" FORCE)
+# Если zlib нет в системе (Windows, минимальные образы) - скачать и собрать.
+set(MZ_FETCH_LIBS ON CACHE BOOL "" FORCE)
 FetchContent_Declare(minizip-ng
     GIT_REPOSITORY https://github.com/zlib-ng/minizip-ng.git
     GIT_TAG        4.0.7
