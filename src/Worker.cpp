@@ -6,10 +6,6 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include <QStorageInfo>
-#include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -133,6 +129,29 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
     int extracted = 0;
     bool failed = false;
 
+    // Проверка свободного места в кэше: распаковка не должна забить диск.
+    // Запас 64 МБ на служебные нужды; если размер неизвестен (bytesAvailable < 0) - пропускаем.
+    const qint64 cacheFree = QStorageInfo(outDir).bytesAvailable();
+    if (cacheFree >= 0 && cacheFree < 64LL * 1024 * 1024) {
+        emit log("Error: Not enough free space in the cache folder for extra content (available " +
+                 QString::number(cacheFree / 1024) + " KB). Aborting extraction.");
+        mz_zip_reader_delete(&reader);
+        return false;
+    }
+
+    // Безопасность пути: имя не должно содержать компонент ".." (а не подстроку "..",
+    // иначе отсекаются легальные имена вроде "a..b"). Абсолютные пути и обратные слеши
+    // тоже запрещены.
+    auto isSafeRelPath = [](const QString& rel) {
+        if (rel.isEmpty() || rel.startsWith(QLatin1Char('/')) || rel.contains(QLatin1Char('\\')))
+            return false;
+        const QStringList parts = rel.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        for (const QString& p : parts) {
+            if (p == QLatin1String("..") || p == QLatin1String(".")) return false;
+        }
+        return true;
+    };
+
     err = mz_zip_reader_goto_first_entry(reader);
     while (err == MZ_OK) {
         mz_zip_file* info = nullptr;
@@ -141,7 +160,7 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
             continue;
         }
         const QString rel = QString::fromUtf8(info->filename);
-        if (rel.isEmpty() || rel.startsWith(QLatin1Char('/')) || rel.contains(QStringLiteral(".."))) {
+        if (!isSafeRelPath(rel)) {
             emit log("Warning: Skipping unsafe path in archive: " + rel);
             err = mz_zip_reader_goto_next_entry(reader);
             continue;
@@ -182,21 +201,45 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
 
         char buf[64 * 1024];
         int32_t n = 0;
+        qint64 written = 0;
+        bool writeFailed = false;
         while ((n = mz_zip_reader_entry_read(reader, buf, sizeof(buf))) > 0) {
             if (out.write(buf, n) != n) {
                 emit log("Warning: Write error for " + rel + ": " + out.errorString());
-                failed = true;
+                writeFailed = true;
+                break;
+            }
+            written += n;
+            // Фактически записанные байты тоже считаем: заявленный размер из каталога
+            // может врать, а распаковка не должна выйти за лимит.
+            if (total - info->uncompressed_size + written > limit) {
+                emit log("Error: The extra archive expands to more than " +
+                         QString::number(limit / (1024 * 1024)) + " MB. Aborting extraction.");
+                writeFailed = true;
                 break;
             }
         }
         out.close();
-        mz_zip_reader_entry_close(reader);
-        if (n < 0) {
+        // mz_zip_reader_entry_close возвращает ошибку CRC/распаковки - именно здесь
+        // обнаруживается битый или подменённый файл.
+        const int closeErr = mz_zip_reader_entry_close(reader);
+        if (writeFailed) {
+            failed = true;
+        } else if (n < 0) {
             emit log("Warning: Read error for " + rel + " (code " + QString::number(n) + ").");
+            failed = true;
+        } else if (closeErr != MZ_OK) {
+            emit log("Warning: CRC/close error for " + rel + " (code " + QString::number(closeErr) + ").");
             failed = true;
         }
         ++extracted;
         err = mz_zip_reader_goto_next_entry(reader);
+    }
+
+    // Конец списка - MZ_END_OF_LIST. Любая другая ошибка означает повреждённый каталог.
+    if (err != MZ_END_OF_LIST && !failed) {
+        emit log("Warning: ZIP central directory is damaged (code " + QString::number(err) + ").");
+        failed = true;
     }
 
     mz_zip_reader_close(reader);
@@ -216,6 +259,10 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
 
 bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot) {
     emit log(QStringLiteral("Copying extra content to SD card..."));
+    if (!QFileInfo(srcDir).isDir()) {
+        emit log("Error: Extra content folder does not exist: " + srcDir);
+        return false;
+    }
     int copied = 0;
     int failed = 0;
 
@@ -326,6 +373,10 @@ bool Worker::copyExtraToSd(const QString& srcDir, const QString& sdRoot) {
     }
     emit log("Extra content copied: " + QString::number(copied) + " files" +
              (failed > 0 ? ", " + QString::number(failed) + " failed" : QString()) + ".");
+    if (copied == 0) {
+        emit log(QStringLiteral("Error: The extra content folder is empty; nothing was copied."));
+        return false;
+    }
     if (failed > 0) {
         emit log("Error: Some extra content files could not be copied. The SD card may be incomplete.");
     }
@@ -877,8 +928,9 @@ bool Worker::isPortPresent(const QString& portLocation) {
 
 // Универсальная процедура обмена AT-командой по последовательному порту.
 // Открывает порт, пишет команду, читает ответ до появления маркера "+KARABAS:"
-// (для version) или до истечения таймаута (для msc). Никаких манипуляций с DTR/RTS
-// и clear() — на Windows они сбивают USB-CDC устройство (RP2040).
+// (для version) или до истечения таймаута (для msc). DTR/RTS поднимаются явно:
+// RP2040 (TinyUSB CDC) передаёт данные только при поднятом DTR. clear() не вызывается -
+// на Windows он сбивает USB-CDC устройство.
 bool Worker::sendAtCommand(const QString& portLocation, const QByteArray& cmd,
                            QByteArray* resp, int timeoutMs) {
     if (resp) resp->clear();
@@ -939,15 +991,20 @@ bool Worker::sendAtCommand(const QString& portLocation, const QByteArray& cmd,
         // (особенно на Windows), поэтому проверяем bytesAvailable() отдельно.
         sp.waitForReadyRead(100);
         if (sp.bytesAvailable() > 0) buf += sp.readAll();
-        // Ответ на version содержит "+KARABAS:" — как только он появился, дочитываем
-        // остаток строки и выходим. Для msc маркера нет, читаем до таймаута.
+        // Успех (+KARABAS:) проверяем РАНЬШЕ ошибки: отладочная строка прошивки
+        // со словом "error" не должна ломать разбор version.
         if (buf.contains("+KARABAS:")) {
-            do {
+            // Дочитываем остаток строки, но не дольше 500 мс и с проверкой отмены:
+            // поток отладки от устройства не должен зациклить чтение.
+            QElapsedTimer drain;
+            drain.start();
+            while (drain.elapsed() < 500 && !m_cancel.load()) {
+                if (!sp.waitForReadyRead(50)) break;
                 buf += sp.readAll();
-            } while (sp.waitForReadyRead(50));
+            }
             break;
         }
-        if (buf.contains("ERROR")) break;
+        if (buf.contains("ERROR", Qt::CaseInsensitive)) break;
     }
     // Диагностика: сколько байт реально пришло и что именно (для отладки проблем
     // с USB-CDC на Windows). Если buf пуст - устройство не ответило вообще.
@@ -1050,7 +1107,9 @@ bool Worker::resetPortToBootloader(const QString& portLocation) {
 
     // После MSC-сеанса Windows перечисляет USB-устройство заново: порт появляется
     // в списке раньше, чем становится реально открываемым (ERROR_GEN_FAILURE).
-    // Ждём до 30 секунд с шагом 1 секунда - этого хватает на медленных машинах.
+    // Повторяем только временные ошибки (OpenError/ResourceError) и только пока порт
+    // виден в списке. Если порта нет вовсе (плата уже в BOOTSEL или отключена) -
+    // выходим сразу, не тратя 30 секунд.
     const int kAttempts = 30;
     QString lastError;
     for (int attempt = 0; attempt < kAttempts; ++attempt) {
@@ -1059,6 +1118,11 @@ bool Worker::resetPortToBootloader(const QString& portLocation) {
             return false;
         }
         if (attempt > 0) {
+            if (!isPortPresent(portLocation)) {
+                m_portOpenFailed = true;
+                emit log("Port " + portLocation + " is no longer present; stopping the 1200 bps reset retries.");
+                return false;
+            }
             emit log(QStringLiteral("Port is not ready yet, retrying 1200 bps reset (%1/%2)...")
                          .arg(attempt + 1).arg(kAttempts));
             QThread::msleep(1000);
@@ -1069,13 +1133,21 @@ bool Worker::resetPortToBootloader(const QString& portLocation) {
         sp.setBaudRate(1200);
         if (!sp.open(QIODevice::ReadWrite)) {
             lastError = sp.errorString();
+            const QSerialPort::SerialPortError e = sp.error();
             // Нет прав - повторять бессмысленно, сразу сообщаем пользователю.
-            if (sp.error() == QSerialPort::PermissionError) {
+            if (e == QSerialPort::PermissionError) {
                 m_portOpenFailed = true;
                 m_permissionDenied = true;
 #if defined(Q_OS_LINUX)
                 emit portAccessDenied(portLocation);
 #endif
+                emit log("Failed to open port " + portLocation + " for 1200 bps reset: " + lastError);
+                return false;
+            }
+            // Повторяем только временные ошибки. Прочие (например, DeviceNotFoundError)
+            // означают, что порт исчез - ждать бессмысленно.
+            if (e != QSerialPort::OpenError && e != QSerialPort::ResourceError) {
+                m_portOpenFailed = true;
                 emit log("Failed to open port " + portLocation + " for 1200 bps reset: " + lastError);
                 return false;
             }
@@ -1190,8 +1262,9 @@ void Worker::rollbackCores(const QStringList& copiedNew, const QList<QPair<QStri
 // Переключение в MSC, бэкап старых ядер, копирование новых, извлечение диска.
 // true - можно продолжать прошивку; false - операция прервана.
 // ----------------------------------------------------------------------------
-bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
-                             const QStringList& newCores, bool updateExtra, bool updateFirmware) {
+Worker::MscResult Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
+                                          const QStringList& newCores, bool updateExtra, bool updateFirmware) {
+    MscResult result;
     emit log(QStringLiteral("Cores check active. Switching Karabas to SD Card MSC mode (card 1)..."));
 
     // Снимок USB-дисков с носителем ДО переключения
@@ -1205,7 +1278,8 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
     // Ядра всегда лежат на карте №1, поэтому режим MSC фиксирован.
     if (!sendMscCommand(portLocation, 1)) {
         emit log(QStringLiteral("Error: Could not switch the device to MSC mode. Aborting."));
-        return false;
+        result.abortReason = QStringLiteral("MSC command failed");
+        return result;
     }
 
     emit log(QStringLiteral("Waiting for SD Card storage drive to mount..."));
@@ -1213,11 +1287,13 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
     if (!waitForMountedVolume([&before]() { return Platform::newDisks(before); }, 40000, &sd)) {
         if (m_cancel.load()) {
             emit log(QStringLiteral("Operation cancelled by user. The device may stay in MSC mode - replug it."));
+            result.abortReason = QStringLiteral("cancelled");
         } else {
             emit log(QStringLiteral("Error: SD card storage drive not detected after switching mode."));
             emit log(Platform::diagnostics());
+            result.abortReason = QStringLiteral("SD card drive not detected");
         }
-        return false;
+        return result;
     }
     emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
 
@@ -1228,7 +1304,8 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
     if (!QDir().mkpath(backupDir)) {
         emit log("Error: Failed to create backup folder: " + backupDir);
         ejectBestEffort(sd);
-        return false;
+        result.abortReason = QStringLiteral("cannot create backup folder");
+        return result;
     }
     emit log("Success: Created backup folder: " + backupDir);
 
@@ -1262,7 +1339,8 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
         rollbackCores(QStringList(), movedOld);
         emit log(QStringLiteral("Error: Backup step failed. Aborting before any new core is written."));
         ejectBestEffort(sd);
-        return false;
+        result.abortReason = QStringLiteral("backup step failed");
+        return result;
     }
 
     // 2) Проверка свободного места: суммарный размер новых ядер + запас 1 МБ
@@ -1274,7 +1352,8 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
                  " KB, available " + QString::number(available / 1024) + " KB). Aborting.");
         rollbackCores(QStringList(), movedOld);
         ejectBestEffort(sd);
-        return false;
+        result.abortReason = QStringLiteral("not enough free space");
+        return result;
     }
 
     // 3) Копирование новых ядер (копия, а не перенос: рабочая папка остаётся для повторной прошивки)
@@ -1302,8 +1381,10 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
         rollbackCores(copiedNew, movedOld);
         emit log(QStringLiteral("Error: Core deployment failed. Original cores were restored. Aborting."));
         ejectBestEffort(sd);
-        return false;
+        result.abortReason = QStringLiteral("core deployment failed");
+        return result;
     }
+    result.coresOk = true;
     emit log("Deployment finished. Copied " + QString::number(copiedNew.size()) + " new core files to SD root.");
 
     if (movedOld.isEmpty() && !QDir().rmdir(backupDir)) {   // пустую папку бэкапа убираем
@@ -1314,14 +1395,19 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
     // пользователь отметил "Download extra content". Наличие маркера от прошлого
     // запуска не должно приводить к копированию при снятой галке.
     if (updateExtra) {
+        result.extraAttempted = true;
         const QString extraFilesDir = workDir() + QStringLiteral("/extra/files");
         if (QFile::exists(workDir() + QStringLiteral("/extra/") + kExtraCompleteMarker) &&
             QFileInfo(extraFilesDir).isDir()) {
             if (!copyExtraToSd(extraFilesDir, root)) {
                 // Сбой копирования extra не должен прерывать прошивку: ядра уже на карте,
-                // прошивка важнее. Итоговая сводка будет в конце.
+                // прошивка важнее. Статус extra будет failed в сводке.
                 emit log(QStringLiteral("Warning: Extra content was not fully copied; continuing with the rest."));
+            } else {
+                result.extraOk = true;
             }
+        } else {
+            emit log(QStringLiteral("Warning: Extra content is not downloaded; skipping extra copy."));
         }
     }
 
@@ -1341,9 +1427,10 @@ bool Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
                                     "itself. The new cores are already on the card. Replug the Karabas (unplug and plug "
                                     "the USB cable)."));
         }
-        return false;
+        result.abortReason = QStringLiteral("eject failed");
+        return result;
     }
-    return true;
+    return result;
 }
 
 // ----------------------------------------------------------------------------
@@ -1365,6 +1452,8 @@ void Worker::doFlash(const Params& p) {
         emit log(QStringLiteral("Flash summary: firmware=%1, cores=%2, extra=%3.")
                     .arg(fwStatus, coresStatus, extraStatus));
     };
+    // Единая точка выхода: печатает сводку и возвращает управление.
+    auto finish = [&]() { printSummary(); };
     if (p.updateFirmware) {
         if (p.firmwarePath.isEmpty()) {
             emit log(QStringLiteral("Error: Firmware file not selected."));
@@ -1419,16 +1508,18 @@ void Worker::doFlash(const Params& p) {
         // Один MSC-сеанс: сначала ядра, затем extra (обе операции на карте №1).
         if (p.updateCores) {
             const ModelInfo& m = models().at(p.modelIndex);
-            if (!updateCoresOnSd(m, p.portLocation, newCores, p.updateExtra, p.updateFirmware)) {
-                coresStatus = QStringLiteral("failed");
-                if (p.updateExtra) extraStatus = QStringLiteral("failed");
-                printSummary();
-                return;
-            }
-            coresStatus = QStringLiteral("done");
+            const MscResult r = updateCoresOnSd(m, p.portLocation, newCores, p.updateExtra, p.updateFirmware);
+            coresStatus = r.coresOk ? QStringLiteral("done") : QStringLiteral("failed");
             if (p.updateExtra) {
-                extraStatus = QFile::exists(workDir() + QStringLiteral("/extra/") + kExtraCompleteMarker)
-                                  ? QStringLiteral("done") : QStringLiteral("failed");
+                if (!r.extraAttempted) {
+                    extraStatus = QStringLiteral("failed (not downloaded)");
+                } else {
+                    extraStatus = r.extraOk ? QStringLiteral("done") : QStringLiteral("failed");
+                }
+            }
+            if (!r.abortReason.isEmpty()) {
+                finish();
+                return;
             }
         } else {
             // Только extra: открываем MSC и копируем.
@@ -1459,7 +1550,7 @@ void Worker::doFlash(const Params& p) {
             emit log(QStringLiteral("Ejecting SD Card drive from system..."));
             if (!ejectBestEffort(sd)) {
                 emit log(QStringLiteral("Error: The SD card could not be ejected. Replug the Karabas."));
-                printSummary();
+                finish();
                 return;
             }
         }
@@ -1480,7 +1571,7 @@ void Worker::doFlash(const Params& p) {
                 emit log(QStringLiteral("Warning: The operation is complete, but the device port was not detected again. "
                                         "Replug the device if it does not respond."));
             }
-            printSummary();
+            finish();
             return;
         }
         if (portFound) {
@@ -1511,6 +1602,8 @@ void Worker::doFlash(const Params& p) {
                 emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                         "Aborting before flashing."));
             }
+            fwStatus = QStringLiteral("failed (reset)");
+            finish();
             return;
         }
     } else if (!p.portLocation.isEmpty()) {
@@ -1524,6 +1617,8 @@ void Worker::doFlash(const Params& p) {
             } else {
                 emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                         "Aborting before flashing."));
+                fwStatus = QStringLiteral("failed (reset)");
+                finish();
                 return;
             }
         }
@@ -1538,11 +1633,14 @@ void Worker::doFlash(const Params& p) {
     if (!waitForMountedVolume([]() { return Platform::bootloaderDisks(); }, 25000, &boot)) {
         if (m_cancel.load()) {
             emit log(QStringLiteral("Operation cancelled by user."));
+            fwStatus = QStringLiteral("cancelled");
         } else {
             emit log(QStringLiteral("Error: Removable drive 'RPI-RP2' not found. Please connect the device in "
                                     "bootloader mode manually."));
             emit log(Platform::diagnostics());
+            fwStatus = QStringLiteral("failed (no RPI-RP2)");
         }
+        finish();
         return;
     }
     emit log("Target drive found: " + boot.mountPoint + " [RPI-RP2] (" + boot.node + ")");
@@ -1569,7 +1667,7 @@ void Worker::doFlash(const Params& p) {
             emit log("Flash write error: " + err);
         }
     }
-    printSummary();
+    finish();
 
     // Eject после прошивки не нужен: RP2040 перезагружается сам сразу после записи
     // последнего блока, и диск RPI-RP2 исчезает. Попытка eject на уже исчезнувшем

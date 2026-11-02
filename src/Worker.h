@@ -95,8 +95,17 @@ private:
 
     bool waitForMountedVolume(const std::function<QList<Platform::Candidate>()>& finder,
                               int timeoutMs, Platform::Candidate* out);
-    bool updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
-                         const QStringList& newCores, bool updateExtra, bool updateFirmware);
+
+    // Результат MSC-сеанса: ядра и extra обновляются в одном сеансе, но их статусы
+    // независимы. abortReason непустой, если сеанс прерван до записи (сводка всё равно печатается).
+    struct MscResult {
+        bool coresOk = false;
+        bool extraOk = false;
+        bool extraAttempted = false;
+        QString abortReason;        // пусто, если сеанс дошёл до конца
+    };
+    MscResult updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
+                              const QStringList& newCores, bool updateExtra, bool updateFirmware);
     void rollbackCores(const QStringList& copiedNew, const QList<QPair<QString, QString>>& movedOld);
     bool ejectBestEffort(const Platform::Candidate& sd);
     // Удаляет служебные файлы ОС (macOS: "._*", .DS_Store и т.п.) с тома перед извлечением.

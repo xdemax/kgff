@@ -19,7 +19,7 @@
 - **Обновляет прошивку** платы (микроконтроллер RP2040).
 - **Заменяет ядра** (файлы `.kg1`, `.kg2`, `.kg3`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
 - **Открывает SD-карту платы** как обычный диск, чтобы вы могли работать с её файлами напрямую.
-- **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.7z` на SD-карту. Файлы, которые уже есть на карте, заменяются; остальные файлы пользователя не трогаются. Перед копированием проверяется свободное место, а перед распаковкой — распакованный размер архива (лимит 2 ГБ). Симлинки из архива не копируются.
+- **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.zip` на SD-карту. Файлы, которые уже есть на карте, заменяются; остальные файлы пользователя не трогаются. Перед копированием проверяется свободное место, а перед распаковкой — распакованный размер архива (лимит 2 ГБ). Симлинки из архива не копируются.
 
 Прошивку и ядра можно обновлять вместе или по отдельности: например, только ядра.
 
@@ -128,7 +128,7 @@
 ## Для разработчиков
 
 Сборка из исходников, устройство проекта, релизы: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). История версий: [CHANGELOG.md](CHANGELOG.md).
-Бинарники `7za` для всех трёх платформ входят в репозиторий (`resources/7za/`), отдельно скачивать их не нужно.
+Распаковка `extra.zip` выполняется встроенной библиотекой `minizip-ng`, которая собирается вместе с программой; внешние архиваторы не нужны.
 
 ## Лицензия
 
@@ -151,7 +151,7 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 ### What the program does
 
 - **Downloads** the latest firmware and cores from the board author's GitHub repositories.
-- **Copies extra content** (ROMs, disk images, etc.) from the `extra.7z` archive to the SD card. Files that already exist on the card are replaced; other user files are left untouched. Free space is checked before copying, and the unpacked archive size is checked before extraction (2 GB limit). Symbolic links from the archive are not copied.
+- **Copies extra content** (ROMs, disk images, etc.) from the `extra.zip` archive to the SD card. Files that already exist on the card are replaced; other user files are left untouched. Free space is checked before copying, and the unpacked archive size is checked before extraction (2 GB limit). Symbolic links from the archive are not copied.
 - **Updates the board firmware** (RP2040 microcontroller).
 - **Replaces cores** (`.kg1`, `.kg2`, `.kg3` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
 - **Opens the board's SD card** as a regular drive so you can work with its files directly.
@@ -271,7 +271,7 @@ Package details: [docs/DEPENDENCIES_linux.txt](docs/DEPENDENCIES_linux.txt).
 ### For developers
 
 Building from source, project structure, releases: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Version history: [CHANGELOG.md](CHANGELOG.md).
-The `7za` binaries for all three platforms are bundled in the repository (`resources/7za/`); no separate download is needed.
+The `extra.zip` archive is unpacked by the bundled `minizip-ng` library, which is built together with the program; no external archiver is needed.
 
 ### License
 
