@@ -1131,9 +1131,9 @@ bool Worker::queryVersion(const QString& portLocation, QString* raw, int* board)
         emit log(QStringLiteral("Error: No response from the device to AT+KARABAS=version."));
         return false;
     }
-    // Успех (+KARABAS:) уже найден в цикле выше, поэтому сюда попадаем только если
-    // его нет. Отдельная строка ERROR означает отказ прошивки.
-    if (reply.hasError) {
+    // Цикл выше выходит и по успеху (+KARABAS:), и по отдельной строке ERROR, поэтому
+    // проверяем оба условия явно: успех имеет приоритет над ошибкой.
+    if (!reply.hasKarabas && reply.hasError) {
         emit log("Error: The device rejected the version command: " + text);
         return false;
     }
