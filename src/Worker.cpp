@@ -1680,16 +1680,28 @@ void Worker::doFlash(const Params& p) {
                 } else if (r.abortReason == QLatin1String("cancelled")) {
                     extraStatus = QStringLiteral("cancelled");
                 } else {
-                    extraStatus = QStringLiteral("failed");
+                    // Как и в ветке ядер: сеанс прерван до шага extra.
+                    extraStatus = QStringLiteral("failed (session aborted)");
                 }
                 if (!r.abortReason.isEmpty()) {
                     // Без eject Карабас не выйдет из MSC, порта не будет - прошивку
                     // продолжать бессмысленно. Ведём себя как в ветке ядер.
                     if (p.updateFirmware) {
                         fwStatus = QStringLiteral("not started");
-                        emit log(QStringLiteral("Error: The MSC session was aborted, so the firmware was not "
-                                                "flashed. Replug the Karabas and press FLASH again with only "
-                                                "'Update firmware' checked to finish flashing."));
+                        // Подсказка зависит от причины: при отказе MSC-команды устройство
+                        // осталось в обычном режиме, переподключать его не нужно.
+                        if (r.abortReason == QLatin1String("cancelled")) {
+                            // Отмена пользователем - не ошибка, лишнюю подсказку не печатаем.
+                        } else if (r.abortReason == QLatin1String("MSC command failed")) {
+                            emit log(QStringLiteral("Error: The MSC command failed, so the firmware was not "
+                                                    "flashed. The device is still in normal mode; press FLASH "
+                                                    "again with only 'Update firmware' checked to finish flashing."));
+                        } else {
+                            emit log(QStringLiteral("Error: The MSC session was aborted, so the firmware was not "
+                                                    "flashed. The device may stay in MSC mode - replug the Karabas "
+                                                    "and press FLASH again with only 'Update firmware' checked to "
+                                                    "finish flashing."));
+                        }
                     }
                     finish();
                     return;
