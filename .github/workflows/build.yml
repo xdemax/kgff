@@ -29,11 +29,14 @@ jobs:
           modules: qtserialport
           cache: true
 
+      - name: Install minizip-ng
+        run: brew install minizip-ng pkg-config
+
       - name: Configure
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_PREFIX_PATH="/usr"
+            -DCMAKE_PREFIX_PATH="$(brew --prefix minizip-ng);$(brew --prefix pkg-config)"
 
       - name: Build
         run: cmake --build build --parallel
@@ -68,10 +71,16 @@ jobs:
           modules: qtserialport
           cache: true
 
+      - name: Install minizip-ng via vcpkg
+        shell: pwsh
+        run: |
+          vcpkg install minizip-ng:x64-windows
+
       - name: Configure
         shell: pwsh
         run: |
-          cmake -S . -B build -A x64
+          cmake -S . -B build -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -111,7 +120,8 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake dpkg-dev qt6-base-dev qt6-serialport-dev libgl1-mesa-dev
+          sudo apt-get install -y cmake dpkg-dev pkg-config qt6-base-dev qt6-serialport-dev \
+            libgl1-mesa-dev libminizip-ng-dev
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -150,9 +160,9 @@ jobs:
       - name: Install system libraries for the Qt platform plugin
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
-            libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
-            libxcb-xinerama0 libxcb-xkb1 libfuse2
+          sudo apt-get install -y pkg-config libminizip-ng-dev libgl1-mesa-dev libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libfuse2
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr

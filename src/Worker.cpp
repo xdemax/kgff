@@ -36,8 +36,10 @@
 #include <exception>
 #include <memory>
 
-#include <archive.h>
-#include <archive_entry.h>
+#include <mz.h>
+#include <mz_strm.h>
+#include <mz_zip.h>
+#include <mz_zip_rw.h>
 
 namespace {
 const qint64 kMaxTextBytes = 4 * 1024 * 1024;       // JSON / HTML
@@ -45,13 +47,7 @@ const qint64 kMaxFileBytes = 64 * 1024 * 1024;      // прошивка / ядр
 const qint64 kMaxExtraBytes = 256 * 1024 * 1024;    // extra.7z
 const QString kCoresCompleteMarker = QStringLiteral("download_complete.txt");
 const QString kExtraCompleteMarker = QStringLiteral("extra_complete.txt");
-const QString kExtraUrl = QStringLiteral("https://raw.githubusercontent.com/xdemax/kgff/refs/heads/main/extra/extra.7z");
-
-static const unsigned char kExtraSalt[] = { 0x5A, 0x13, 0xC7, 0x2E, 0x91, 0x44, 0xB8, 0x6D };
-static const unsigned char kExtraBlob[] = {
-    0x09, 0x7F, 0xA4, 0x4F, 0xE2, 0x2D, 0xDA, 0x0E,
-    0x3B, 0x7A, 0xB1, 0x5C, 0xF5, 0x2B, 0xCB, 0x0A
-};
+const QString kExtraUrl = QStringLiteral("https://raw.githubusercontent.com/xdemax/kgff/refs/heads/main/extra/extra.zip");
 
 QNetworkRequest makeRequest(const QUrl& url) {
     QNetworkRequest req(url);
@@ -98,15 +94,6 @@ bool Worker::pause(int ms) {
 void Worker::runDownload(const Params& p) { guarded([&]() { doDownload(p); }); }
 void Worker::runFlash(const Params& p) { guarded([&]() { doFlash(p); }); }
 
-QByteArray Worker::extraKey() const {
-    const int n = static_cast<int>(sizeof(kExtraBlob));
-    QByteArray out(n, '\0');
-    for (int i = 0; i < n; ++i) {
-        out[i] = static_cast<char>(kExtraBlob[i] ^ kExtraSalt[i % static_cast<int>(sizeof(kExtraSalt))]);
-    }
-    return out;
-}
-
 bool Worker::downloadExtraArchive(const QString& destPath) {
     emit log(QStringLiteral("Downloading extra content archive..."));
     QString err;
@@ -128,21 +115,16 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
 
     emit log(QStringLiteral("Extracting extra content..."));
 
-    QByteArray key = extraKey();
-    struct archive* a = archive_read_new();
-    archive_read_support_format_7zip(a);
-    archive_read_support_filter_all(a);
-    if (archive_read_add_passphrase(a, key.constData()) != ARCHIVE_OK) {
-        emit log("Error: libarchive does not support passphrases.");
-        archive_read_free(a);
-        key.fill('\0');
+    void* reader = mz_zip_reader_create();
+    if (!reader) {
+        emit log(QStringLiteral("Error: Cannot create ZIP reader."));
         return false;
     }
-    key.fill('\0');
 
-    if (archive_read_open_filename(a, archivePath.toUtf8().constData(), 10240) != ARCHIVE_OK) {
-        emit log("Error: Cannot open extra archive: " + QString::fromUtf8(archive_error_string(a)));
-        archive_read_free(a);
+    int err = mz_zip_reader_open_file(reader, archivePath.toUtf8().constData());
+    if (err != MZ_OK) {
+        emit log("Error: Cannot open extra archive (code " + QString::number(err) + ").");
+        mz_zip_reader_delete(&reader);
         return false;
     }
 
@@ -151,27 +133,29 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
     int extracted = 0;
     bool failed = false;
 
-    struct archive_entry* entry = nullptr;
-    while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
-        const char* name = archive_entry_pathname(entry);
-        if (!name) continue;
-        const QString rel = QString::fromUtf8(name);
+    err = mz_zip_reader_goto_first_entry(reader);
+    while (err == MZ_OK) {
+        mz_zip_file* info = nullptr;
+        if (mz_zip_reader_entry_get_info(reader, &info) != MZ_OK || !info) {
+            err = mz_zip_reader_goto_next_entry(reader);
+            continue;
+        }
+        const QString rel = QString::fromUtf8(info->filename);
         if (rel.isEmpty() || rel.startsWith(QLatin1Char('/')) || rel.contains(QStringLiteral(".."))) {
             emit log("Warning: Skipping unsafe path in archive: " + rel);
+            err = mz_zip_reader_goto_next_entry(reader);
             continue;
         }
         const QString dst = QDir::cleanPath(outDir + QLatin1Char('/') + rel);
 
-        if (archive_entry_filetype(entry) == AE_IFDIR) {
+        // Каталог: имя оканчивается на '/'
+        if (rel.endsWith(QLatin1Char('/'))) {
             QDir().mkpath(dst);
-            continue;
-        }
-        if (archive_entry_filetype(entry) != AE_IFREG) {
-            emit log("Warning: Skipping non-regular file in archive: " + rel);
+            err = mz_zip_reader_goto_next_entry(reader);
             continue;
         }
 
-        total += archive_entry_size(entry);
+        total += info->uncompressed_size;
         if (total > limit) {
             emit log("Error: The extra archive expands to more than " +
                      QString::number(limit / (1024 * 1024)) + " MB. Aborting extraction.");
@@ -184,32 +168,39 @@ bool Worker::extractExtraArchive(const QString& archivePath, const QString& outD
         if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
             emit log("Warning: Cannot create " + rel + ": " + out.errorString());
             failed = true;
+            err = mz_zip_reader_goto_next_entry(reader);
             continue;
         }
-        const void* buf = nullptr;
-        size_t size = 0;
-        la_int64_t offset = 0;
-        int r;
-        while ((r = archive_read_data_block(a, &buf, &size, &offset)) == ARCHIVE_OK) {
-            if (out.write(static_cast<const char*>(buf), static_cast<qint64>(size)) != static_cast<qint64>(size)) {
+
+        err = mz_zip_reader_entry_open(reader);
+        if (err != MZ_OK) {
+            emit log("Warning: Cannot open entry " + rel + " (code " + QString::number(err) + ").");
+            failed = true;
+            err = mz_zip_reader_goto_next_entry(reader);
+            continue;
+        }
+
+        char buf[64 * 1024];
+        int32_t n = 0;
+        while ((n = mz_zip_reader_entry_read(reader, buf, sizeof(buf))) > 0) {
+            if (out.write(buf, n) != n) {
                 emit log("Warning: Write error for " + rel + ": " + out.errorString());
                 failed = true;
                 break;
             }
         }
         out.close();
-        if (r != ARCHIVE_EOF && r != ARCHIVE_OK) {
-            emit log("Warning: Read error for " + rel + ": " + QString::fromUtf8(archive_error_string(a)));
+        mz_zip_reader_entry_close(reader);
+        if (n < 0) {
+            emit log("Warning: Read error for " + rel + " (code " + QString::number(n) + ").");
             failed = true;
         }
         ++extracted;
+        err = mz_zip_reader_goto_next_entry(reader);
     }
 
-    if (archive_read_has_encrypted_entries(a) == 1 && extracted == 0) {
-        emit log(QStringLiteral("Error: The extra archive is encrypted and the passphrase is wrong."));
-        failed = true;
-    }
-    archive_read_free(a);
+    mz_zip_reader_close(reader);
+    mz_zip_reader_delete(&reader);
 
     if (extracted == 0) {
         emit log(QStringLiteral("Error: The extra archive is empty or corrupted."));
@@ -762,7 +753,7 @@ void Worker::doDownload(const Params& p) {
             // Удаляем старый маркер ДО скачивания: если новая распаковка упадёт посередине,
             // FLASH не должен принять частично распакованный архив за готовый набор.
             QFile::remove(extraDir + "/" + kExtraCompleteMarker);
-            const QString archive = extraDir + QStringLiteral("/extra.7z");
+            const QString archive = extraDir + QStringLiteral("/extra.zip");
             const QString filesDir = extraDir + QStringLiteral("/files");
             // Сбой extra не должен прерывать скачивание ядер и прошивку: сообщаем
             // об ошибке и идём дальше. Итоговая сводка будет в конце.

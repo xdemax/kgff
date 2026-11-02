@@ -16,33 +16,30 @@ if(NOT Qt6_FOUND)
         "If Qt is installed in a non-standard place, pass -DCMAKE_PREFIX_PATH=<path to Qt>.")
 endif()
 
-# libarchive: распаковка extra.7z без внешнего 7za (BSD-2-Clause, есть во всех дистрибутивах).
-# Сначала штатный FindLibArchive из CMake, затем запасной путь через pkg-config:
-# в некоторых окружениях (CI, Homebrew на macOS, минимальные образы) модуль CMake
-# не находит библиотеку, хотя libarchive.pc присутствует.
-find_package(LibArchive QUIET)
-if(NOT LibArchive_FOUND)
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(LibArchive_PC QUIET libarchive)
-    endif()
-    if(LibArchive_PC_FOUND)
-        add_library(LibArchive::LibArchive UNKNOWN IMPORTED)
-        set_target_properties(LibArchive::LibArchive PROPERTIES
-            IMPORTED_LOCATION "${LibArchive_PC_LINK_LIBRARIES}"
-            INTERFACE_INCLUDE_DIRECTORIES "${LibArchive_PC_INCLUDE_DIRS}"
-            INTERFACE_LINK_LIBRARIES "${LibArchive_PC_LIBRARIES}")
-        set(LibArchive_FOUND TRUE)
+# minizip-ng: распаковка extra.zip (zlib-подобная лицензия, есть во всех дистрибутивах).
+# Сначала штатный поиск через pkg-config (minizip-ng ставит .pc-файл), затем
+# запасной путь через find_path/find_library для систем без pkg-config.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(MinizipNG QUIET minizip-ng)
+endif()
+if(NOT MinizipNG_FOUND)
+    find_path(MinizipNG_INCLUDE_DIR NAMES mz.h PATH_SUFFIXES minizip-ng)
+    find_library(MinizipNG_LIBRARY NAMES minizip-ng minizip)
+    if(MinizipNG_INCLUDE_DIR AND MinizipNG_LIBRARY)
+        set(MinizipNG_FOUND TRUE)
+        set(MinizipNG_INCLUDE_DIRS "${MinizipNG_INCLUDE_DIR}")
+        set(MinizipNG_LIBRARIES "${MinizipNG_LIBRARY}")
     endif()
 endif()
-if(NOT LibArchive_FOUND)
+if(NOT MinizipNG_FOUND)
     message(FATAL_ERROR
-        "libarchive was not found.\n"
-        "  Ubuntu/Debian: sudo apt install libarchive-dev pkg-config\n"
-        "  Fedora:        sudo dnf install libarchive-devel pkgconf\n"
-        "  Arch/Manjaro:  sudo pacman -S libarchive pkgconf\n"
-        "  macOS:         brew install libarchive pkg-config\n"
-        "  Windows:       vcpkg install libarchive:x64-windows")
+        "minizip-ng was not found.\n"
+        "  Ubuntu/Debian: sudo apt install libminizip-ng-dev pkg-config\n"
+        "  Fedora:        sudo dnf install minizip-ng-devel pkgconf\n"
+        "  Arch/Manjaro:  sudo pacman -S minizip-ng pkgconf\n"
+        "  macOS:         brew install minizip-ng pkg-config\n"
+        "  Windows:       vcpkg install minizip-ng:x64-windows")
 endif()
 
 # Версия: номер из project(... VERSION) + описание из git (тег, число коммитов, хэш, -dirty).
@@ -92,9 +89,10 @@ qt_add_executable(KarabasFlasher WIN32 MACOSX_BUNDLE
 target_include_directories(KarabasFlasher PRIVATE ${CMAKE_BINARY_DIR}/generated)
 
 
+target_include_directories(KarabasFlasher PRIVATE ${MinizipNG_INCLUDE_DIRS})
 target_link_libraries(KarabasFlasher PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::SerialPort
-    LibArchive::LibArchive)
+    ${MinizipNG_LIBRARIES})
 
 # Иконка приложения для exe (Windows) и .app-бандла (macOS).
 # Linux использует resources/krb.png через install() ниже.
