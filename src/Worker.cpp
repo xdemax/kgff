@@ -1157,9 +1157,14 @@ bool Worker::resetPortToBootloader(const QString& portLocation) {
                 emit log("Failed to open port " + portLocation + " for 1200 bps reset: " + lastError);
                 return false;
             }
-            // Повторяем только временные ошибки. Прочие (например, DeviceNotFoundError)
-            // означают, что порт исчез - ждать бессмысленно.
-            if (e != QSerialPort::OpenError && e != QSerialPort::ResourceError) {
+            // Повторяем всё, кроме заведомо безнадёжных случаев:
+            //   - PermissionError: нет прав, повтор не поможет;
+            //   - DeviceNotFoundError: порта нет вовсе (плата уже в BOOTSEL или отключена).
+            // Остальные коды (UnknownError, ResourceError, OpenError и т.п.) считаем
+            // временными: на Windows ERROR_GEN_FAILURE ("устройство не работает") приходит
+            // как UnknownError, а не как OpenError/ResourceError, поэтому фильтр по
+            // конкретным кодам отключал бы повторы именно в сценарии, ради которого они введены.
+            if (e == QSerialPort::DeviceNotFoundError) {
                 m_portOpenFailed = true;
                 emit log("Failed to open port " + portLocation + " for 1200 bps reset: " + lastError);
                 return false;
