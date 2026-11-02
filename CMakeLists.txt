@@ -21,7 +21,8 @@ endif()
 # через FetchContent. Это даёт одинаковую версию на всех платформах и убирает
 # зависимость от brew/vcpkg/apt.
 include(FetchContent)
-set(MZ_COMPAT_VERSION "4.0.0" CACHE STRING "" FORCE)
+# MZ_COMPAT_VERSION - целое число (110 = совместимость с minizip 1.1.0), не строка с точками.
+set(MZ_COMPAT_VERSION "110" CACHE STRING "" FORCE)
 set(MZ_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(MZ_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(MZ_ENABLE_WERROR OFF CACHE BOOL "" FORCE)
@@ -78,8 +79,9 @@ qt_add_executable(KarabasFlasher WIN32 MACOSX_BUNDLE
     ${PLATFORM_SRC}
 )
 
-target_include_directories(KarabasFlasher PRIVATE ${CMAKE_BINARY_DIR}/generated)
-
+target_include_directories(KarabasFlasher PRIVATE
+    ${CMAKE_BINARY_DIR}/generated
+    ${minizip-ng_SOURCE_DIR})
 
 target_link_libraries(KarabasFlasher PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::SerialPort
