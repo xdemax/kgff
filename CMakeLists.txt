@@ -61,6 +61,14 @@ FetchContent_Declare(minizip-ng
     GIT_SHALLOW    TRUE)
 FetchContent_MakeAvailable(minizip-ng)
 
+# minizip-ng 4.0.7 содержит strncat с границей, зависящей от strlen источника
+# (mz_zip_rw.c: mz_zip_reader_entry_save_file). GCC 14+ выдаёт на это
+# -Wstringop-overflow. Предупреждение относится к стороннему коду, поэтому
+# подавляем его только для цели minizip, не затрагивая предупреждения проекта.
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 14)
+    target_compile_options(minizip PRIVATE -Wno-stringop-overflow)
+endif()
+
 # Версия: номер из project(... VERSION) + описание из git (тег, число коммитов, хэш, -dirty).
 # Описание считается при конфигурации; если git нет (сборка из zip), будет "no-git".
 find_package(Git QUIET)
