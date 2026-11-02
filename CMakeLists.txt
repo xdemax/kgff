@@ -16,31 +16,23 @@ if(NOT Qt6_FOUND)
         "If Qt is installed in a non-standard place, pass -DCMAKE_PREFIX_PATH=<path to Qt>.")
 endif()
 
-# minizip-ng: распаковка extra.zip (zlib-подобная лицензия, есть во всех дистрибутивах).
-# Сначала штатный поиск через pkg-config (minizip-ng ставит .pc-файл), затем
-# запасной путь через find_path/find_library для систем без pkg-config.
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(MinizipNG QUIET minizip-ng)
-endif()
-if(NOT MinizipNG_FOUND)
-    find_path(MinizipNG_INCLUDE_DIR NAMES mz.h PATH_SUFFIXES minizip-ng)
-    find_library(MinizipNG_LIBRARY NAMES minizip-ng minizip)
-    if(MinizipNG_INCLUDE_DIR AND MinizipNG_LIBRARY)
-        set(MinizipNG_FOUND TRUE)
-        set(MinizipNG_INCLUDE_DIRS "${MinizipNG_INCLUDE_DIR}")
-        set(MinizipNG_LIBRARIES "${MinizipNG_LIBRARY}")
-    endif()
-endif()
-if(NOT MinizipNG_FOUND)
-    message(FATAL_ERROR
-        "minizip-ng was not found.\n"
-        "  Ubuntu/Debian: sudo apt install libminizip-ng-dev pkg-config\n"
-        "  Fedora:        sudo dnf install minizip-ng-devel pkgconf\n"
-        "  Arch/Manjaro:  sudo pacman -S minizip-ng pkgconf\n"
-        "  macOS:         brew install minizip-ng pkg-config\n"
-        "  Windows:       vcpkg install minizip-ng:x64-windows")
-endif()
+# minizip-ng: распаковка extra.zip. В большинстве дистрибутивов пакета нет
+# (в Ubuntu 24.04 libminizip-ng-dev отсутствует), поэтому собираем из исходников
+# через FetchContent. Это даёт одинаковую версию на всех платформах и убирает
+# зависимость от brew/vcpkg/apt.
+include(FetchContent)
+set(MZ_COMPAT_VERSION "4.0.0" CACHE STRING "" FORCE)
+set(MZ_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(MZ_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(MZ_ENABLE_WERROR OFF CACHE BOOL "" FORCE)
+set(MZ_PKGCONFIG_INSTALLDIR "" CACHE STRING "" FORCE)
+set(MZ_CMAKE_INSTALLDIR "" CACHE STRING "" FORCE)
+set(MZ_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(minizip-ng
+    GIT_REPOSITORY https://github.com/zlib-ng/minizip-ng.git
+    GIT_TAG        4.0.7
+    GIT_SHALLOW    TRUE)
+FetchContent_MakeAvailable(minizip-ng)
 
 # Версия: номер из project(... VERSION) + описание из git (тег, число коммитов, хэш, -dirty).
 # Описание считается при конфигурации; если git нет (сборка из zip), будет "no-git".
@@ -89,10 +81,9 @@ qt_add_executable(KarabasFlasher WIN32 MACOSX_BUNDLE
 target_include_directories(KarabasFlasher PRIVATE ${CMAKE_BINARY_DIR}/generated)
 
 
-target_include_directories(KarabasFlasher PRIVATE ${MinizipNG_INCLUDE_DIRS})
 target_link_libraries(KarabasFlasher PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::SerialPort
-    ${MinizipNG_LIBRARIES})
+    minizip-ng)
 
 # Иконка приложения для exe (Windows) и .app-бандла (macOS).
 # Linux использует resources/krb.png через install() ниже.
