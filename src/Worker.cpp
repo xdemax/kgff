@@ -1595,48 +1595,65 @@ void Worker::doFlash(const Params& p) {
             // Только extra: сначала проверяем, что архив скачан и распакован.
             // Иначе MSC-сеанс (две перезагрузки устройства) запускается впустую,
             // и только copyExtraToSd сообщает об ошибке.
-            if (!QFile::exists(extraDir + "/" + kExtraCompleteMarker) || !QFileInfo(extraFilesDir).isDir()) {
-                emit log(QStringLiteral("Error: No downloaded extra content found. Check 'Download extra content' "
-                                        "and press 'Download via GitHub' to fetch it."));
+            const bool extraReady =
+                QFile::exists(extraDir + "/" + kExtraCompleteMarker) && QFileInfo(extraFilesDir).isDir();
+            if (!extraReady) {
                 extraStatus = QStringLiteral("failed (not downloaded)");
-                finish();
-                return;
-            }
-            // Открываем MSC и копируем.
-            emit log(QStringLiteral("Switching Karabas to SD Card MSC mode (card 1) for extra content..."));
-            const QSet<QString> before = Platform::readyRemovableDisks();
-            if (!sendMscCommand(p.portLocation, 1)) {
-                emit log(QStringLiteral("Error: Could not switch the device to MSC mode. Aborting."));
-                extraStatus = QStringLiteral("failed");
-                finish();
-                return;
-            }
-            emit log(QStringLiteral("Waiting for SD Card storage drive to mount..."));
-            Platform::Candidate sd;
-            if (!waitForMountedVolume([&before]() { return Platform::newDisks(before); }, 40000, &sd)) {
-                if (m_cancel.load()) {
-                    emit log(QStringLiteral("Operation cancelled by user. The device may stay in MSC mode - replug it."));
-                    extraStatus = QStringLiteral("cancelled");
-                } else {
-                    emit log(QStringLiteral("Error: SD card storage drive not detected after switching mode."));
-                    emit log(Platform::diagnostics());
-                    extraStatus = QStringLiteral("failed");
+                if (!p.updateFirmware) {
+                    // extra - единственная отмеченная операция: продолжать нечего.
+                    emit log(QStringLiteral("Error: No downloaded extra content found. Check 'Download extra content' "
+                                            "and press 'Download via GitHub' to fetch it."));
+                    finish();
+                    return;
                 }
-                finish();
-                return;
-            }
-            emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
-            const bool extraOk = copyExtraToSd(extraFilesDir, sd.mountPoint);
-            extraStatus = extraOk ? QStringLiteral("done") : QStringLiteral("failed");
+                // Отмечена ещё и прошивка: MSC-блок пропускаем, extra уже помечен как
+                // failed, а прошивка должна выполниться. Сообщение об этом уже выведено
+                // выше при проверке маркера.
+            } else {
+                // Открываем MSC и копируем.
+                emit log(QStringLiteral("Switching Karabas to SD Card MSC mode (card 1) for extra content..."));
+                const QSet<QString> before = Platform::readyRemovableDisks();
+                if (!sendMscCommand(p.portLocation, 1)) {
+                    emit log(QStringLiteral("Error: Could not switch the device to MSC mode. Aborting."));
+                    extraStatus = QStringLiteral("failed");
+                    if (!p.updateFirmware) {
+                        finish();
+                        return;
+                    }
+                } else {
+                    emit log(QStringLiteral("Waiting for SD Card storage drive to mount..."));
+                    Platform::Candidate sd;
+                    if (!waitForMountedVolume([&before]() { return Platform::newDisks(before); }, 40000, &sd)) {
+                        if (m_cancel.load()) {
+                            emit log(QStringLiteral("Operation cancelled by user. The device may stay in MSC mode - replug it."));
+                            extraStatus = QStringLiteral("cancelled");
+                        } else {
+                            emit log(QStringLiteral("Error: SD card storage drive not detected after switching mode."));
+                            emit log(Platform::diagnostics());
+                            extraStatus = QStringLiteral("failed");
+                        }
+                        if (!p.updateFirmware) {
+                            finish();
+                            return;
+                        }
+                    } else {
+                        emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
+                        const bool extraOk = copyExtraToSd(extraFilesDir, sd.mountPoint);
+                        extraStatus = extraOk ? QStringLiteral("done") : QStringLiteral("failed");
 
-            // Служебные файлы ОС (macOS: "._*") удаляем ДО извлечения карты
-            cleanupVolumeJunk(sd.mountPoint, QString());
+                        // Служебные файлы ОС (macOS: "._*") удаляем ДО извлечения карты
+                        cleanupVolumeJunk(sd.mountPoint, QString());
 
-            emit log(QStringLiteral("Ejecting SD Card drive from system..."));
-            if (!ejectBestEffort(sd)) {
-                emit log(QStringLiteral("Error: The SD card could not be ejected. Replug the Karabas."));
-                finish();
-                return;
+                        emit log(QStringLiteral("Ejecting SD Card drive from system..."));
+                        if (!ejectBestEffort(sd)) {
+                            emit log(QStringLiteral("Error: The SD card could not be ejected. Replug the Karabas."));
+                            if (!p.updateFirmware) {
+                                finish();
+                                return;
+                            }
+                        }
+                    }
+                }
             }
         }
 
