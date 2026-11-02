@@ -109,6 +109,10 @@ private:
     };
     MscResult updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
                               const QStringList& newCores, bool updateExtra, bool updateFirmware);
+    // MSC-сеанс «только extra»: переключение в MSC, ожидание диска, копирование, eject.
+    // Возвращает тот же MscResult, что и updateCoresOnSd, чтобы doFlash обрабатывал
+    // прерывание единообразно.
+    MscResult copyExtraViaMsc(const QString& portLocation, const QString& extraFilesDir);
     void rollbackCores(const QStringList& copiedNew, const QList<QPair<QString, QString>>& movedOld);
     bool ejectBestEffort(const Platform::Candidate& sd);
     // Удаляет служебные файлы ОС (macOS: "._*", .DS_Store и т.п.) с тома перед извлечением.

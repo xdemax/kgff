@@ -1494,6 +1494,58 @@ Worker::MscResult Worker::updateCoresOnSd(const ModelInfo& m, const QString& por
 }
 
 // ----------------------------------------------------------------------------
+// MSC-сеанс «только extra»: переключение в MSC, ожидание диска, копирование, eject.
+// Возвращает MscResult с тем же контрактом, что и updateCoresOnSd: abortReason
+// непустой, если сеанс прерван до записи прошивки (без eject Карабас не выйдет
+// из MSC, порта не будет, и продолжать прошивку бессмысленно).
+// ----------------------------------------------------------------------------
+Worker::MscResult Worker::copyExtraViaMsc(const QString& portLocation, const QString& extraFilesDir) {
+    MscResult result;
+    result.extraAttempted = true;
+
+    emit log(QStringLiteral("Switching Karabas to SD Card MSC mode (card 1) for extra content..."));
+    const QSet<QString> before = Platform::readyRemovableDisks();
+    if (!sendMscCommand(portLocation, 1)) {
+        emit log(QStringLiteral("Error: Could not switch the device to MSC mode. Aborting."));
+        result.abortReason = QStringLiteral("MSC command failed");
+        return result;
+    }
+
+    emit log(QStringLiteral("Waiting for SD Card storage drive to mount..."));
+    Platform::Candidate sd;
+    if (!waitForMountedVolume([&before]() { return Platform::newDisks(before); }, 40000, &sd)) {
+        if (m_cancel.load()) {
+            emit log(QStringLiteral("Operation cancelled by user. The device may stay in MSC mode - replug it."));
+            result.abortReason = QStringLiteral("cancelled");
+        } else {
+            emit log(QStringLiteral("Error: SD card storage drive not detected after switching mode."));
+            emit log(Platform::diagnostics());
+            result.abortReason = QStringLiteral("SD card drive not detected");
+        }
+        return result;
+    }
+    emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
+
+    result.extraDownloaded = true;
+    result.extraOk = copyExtraToSd(extraFilesDir, sd.mountPoint);
+    if (!result.extraOk) {
+        emit log(QStringLiteral("Warning: Extra content was not fully copied."));
+    }
+
+    // Служебные файлы ОС (macOS: "._*") удаляем ДО извлечения карты
+    cleanupVolumeJunk(sd.mountPoint, QString());
+
+    emit log(QStringLiteral("Ejecting SD Card drive from system..."));
+    if (!ejectBestEffort(sd)) {
+        emit log(QStringLiteral("Error: The SD card could not be ejected, so the device cannot leave MSC mode by "
+                                "itself. Replug the Karabas (unplug and plug the USB cable)."));
+        result.abortReason = QStringLiteral("eject failed");
+        return result;
+    }
+    return result;
+}
+
+// ----------------------------------------------------------------------------
 // Прошивка
 // ----------------------------------------------------------------------------
 void Worker::doFlash(const Params& p) {
@@ -1620,52 +1672,27 @@ void Worker::doFlash(const Params& p) {
                 // failed, а прошивка должна выполниться. Сообщение об этом уже выведено
                 // выше при проверке маркера.
             } else {
-                // Открываем MSC и копируем.
-                emit log(QStringLiteral("Switching Karabas to SD Card MSC mode (card 1) for extra content..."));
-                const QSet<QString> before = Platform::readyRemovableDisks();
-                if (!sendMscCommand(p.portLocation, 1)) {
-                    emit log(QStringLiteral("Error: Could not switch the device to MSC mode. Aborting."));
-                    extraStatus = QStringLiteral("failed");
-                    if (!p.updateFirmware) {
-                        finish();
-                        return;
-                    }
-                    fwStatus = QStringLiteral("not started");
+                // Открываем MSC и копируем. Логика сеанса вынесена в copyExtraViaMsc,
+                // чтобы doFlash обрабатывал прерывание так же, как в ветке ядер.
+                const MscResult r = copyExtraViaMsc(p.portLocation, extraFilesDir);
+                if (r.extraOk) {
+                    extraStatus = QStringLiteral("done");
+                } else if (r.abortReason == QLatin1String("cancelled")) {
+                    extraStatus = QStringLiteral("cancelled");
                 } else {
-                    emit log(QStringLiteral("Waiting for SD Card storage drive to mount..."));
-                    Platform::Candidate sd;
-                    if (!waitForMountedVolume([&before]() { return Platform::newDisks(before); }, 40000, &sd)) {
-                        if (m_cancel.load()) {
-                            emit log(QStringLiteral("Operation cancelled by user. The device may stay in MSC mode - replug it."));
-                            extraStatus = QStringLiteral("cancelled");
-                        } else {
-                            emit log(QStringLiteral("Error: SD card storage drive not detected after switching mode."));
-                            emit log(Platform::diagnostics());
-                            extraStatus = QStringLiteral("failed");
-                        }
-                        if (!p.updateFirmware) {
-                            finish();
-                            return;
-                        }
+                    extraStatus = QStringLiteral("failed");
+                }
+                if (!r.abortReason.isEmpty()) {
+                    // Без eject Карабас не выйдет из MSC, порта не будет - прошивку
+                    // продолжать бессмысленно. Ведём себя как в ветке ядер.
+                    if (p.updateFirmware) {
                         fwStatus = QStringLiteral("not started");
-                    } else {
-                        emit log("Found SD Card drive: " + sd.mountPoint + " [" + sd.label + "] (" + sd.node + ")");
-                        const bool extraOk = copyExtraToSd(extraFilesDir, sd.mountPoint);
-                        extraStatus = extraOk ? QStringLiteral("done") : QStringLiteral("failed");
-
-                        // Служебные файлы ОС (macOS: "._*") удаляем ДО извлечения карты
-                        cleanupVolumeJunk(sd.mountPoint, QString());
-
-                        emit log(QStringLiteral("Ejecting SD Card drive from system..."));
-                        if (!ejectBestEffort(sd)) {
-                            emit log(QStringLiteral("Error: The SD card could not be ejected. Replug the Karabas."));
-                            if (!p.updateFirmware) {
-                                finish();
-                                return;
-                            }
-                            fwStatus = QStringLiteral("not started");
-                        }
+                        emit log(QStringLiteral("Error: The MSC session was aborted, so the firmware was not "
+                                                "flashed. Replug the Karabas and press FLASH again with only "
+                                                "'Update firmware' checked to finish flashing."));
                     }
+                    finish();
+                    return;
                 }
             }
         }
