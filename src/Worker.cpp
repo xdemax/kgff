@@ -1458,6 +1458,7 @@ Worker::MscResult Worker::updateCoresOnSd(const ModelInfo& m, const QString& por
         const QString extraFilesDir = workDir() + QStringLiteral("/extra/files");
         if (QFile::exists(workDir() + QStringLiteral("/extra/") + kExtraCompleteMarker) &&
             QFileInfo(extraFilesDir).isDir()) {
+            result.extraDownloaded = true;
             if (!copyExtraToSd(extraFilesDir, root)) {
                 // Сбой копирования extra не должен прерывать прошивку: ядра уже на карте,
                 // прошивка важнее. Статус extra будет failed в сводке.
@@ -1582,11 +1583,15 @@ void Worker::doFlash(const Params& p) {
                 if (!r.extraAttempted) {
                     // Сеанс прервался до шага extra (ядра/бэкап/eject) - extra не трогали.
                     extraStatus = QStringLiteral("failed (session aborted)");
+                } else if (r.extraOk) {
+                    extraStatus = QStringLiteral("done");
+                } else if (!r.extraDownloaded) {
+                    // Набор не был скачан - пользователю нужно нажать "Download via GitHub".
+                    extraStatus = QStringLiteral("failed (not downloaded)");
                 } else {
-                    // extraAttempted == true: шаг extra выполнялся, но набор не был скачан
-                    // (или копирование не удалось) - это и есть "not downloaded".
-                    extraStatus = r.extraOk ? QStringLiteral("done")
-                                            : QStringLiteral("failed (not downloaded)");
+                    // Набор скачан, но копирование на карту не удалось: перекачивать нечего,
+                    // нужно проверить карту (место, права, eject).
+                    extraStatus = QStringLiteral("failed (copy error)");
                 }
             }
             if (!r.abortReason.isEmpty()) {

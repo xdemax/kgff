@@ -102,6 +102,9 @@ private:
         bool coresOk = false;
         bool extraOk = false;
         bool extraAttempted = false;
+        // true, если набор extra был скачан и распакован на момент шага копирования.
+        // Нужно, чтобы отличить "не скачан" от "скачан, но копирование не удалось".
+        bool extraDownloaded = false;
         QString abortReason;        // пусто, если сеанс дошёл до конца
     };
     MscResult updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
