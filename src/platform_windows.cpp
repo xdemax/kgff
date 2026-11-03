@@ -32,17 +32,16 @@ QStringList allRemovableRoots() {
 }
 
 // true, если в диске есть готовый носитель (том читается).
-// Сразу после появления буквы Windows может ещё не дочитать метку тома
-// (GetVolumeInformationW возвращает ошибку) - поэтому несколько попыток.
+// Одна попытка без ретраев: функция вызывается в циклах опроса (каждые 500 мс),
+// и повторные попытки на пустом слоте кардридера или приводе без диска
+// добавляли бы около секунды на каждый вызов. Готовность носителя проверяется
+// на следующей итерации цикла опроса.
 bool volumeLabel(const QString& root, QString* label) {
     wchar_t buf[MAX_PATH + 1] = { 0 };
     const std::wstring w = nativeRoot(root).toStdWString();
-    for (int attempt = 0; attempt < 5; ++attempt) {
-        if (GetVolumeInformationW(w.c_str(), buf, MAX_PATH + 1, nullptr, nullptr, nullptr, nullptr, 0)) {
-            if (label) *label = QString::fromWCharArray(buf);
-            return true;
-        }
-        QThread::msleep(200);
+    if (GetVolumeInformationW(w.c_str(), buf, MAX_PATH + 1, nullptr, nullptr, nullptr, nullptr, 0)) {
+        if (label) *label = QString::fromWCharArray(buf);
+        return true;
     }
     return false;
 }
@@ -108,9 +107,15 @@ QList<Candidate> newDisks(const QSet<QString>& before) {
 
 QList<Candidate> bootloaderDisks() {
     QList<Candidate> out;
-    // Ищем по метке среди ВСЕХ логических дисков: RP2040 в BOOTSEL на Windows
-    // иногда определяется как DRIVE_FIXED, и фильтр по DRIVE_REMOVABLE его терял.
+    // Ищем по метке среди логических дисков типов FIXED и REMOVABLE: RP2040 в BOOTSEL
+    // на Windows иногда определяется как DRIVE_FIXED, и фильтр только по DRIVE_REMOVABLE
+    // его терял. Сетевые (DRIVE_REMOTE), CD-ROM и диски без корневого каталога
+    // пропускаем: GetVolumeInformationW на отключённой сетевой шаре может блокироваться
+    // на десятки секунд, а bootloaderDisks() вызывается перед каждой прошивкой.
     for (const QString& r : allDriveRoots()) {
+        const std::wstring w = nativeRoot(r).toStdWString();
+        const UINT type = GetDriveTypeW(w.c_str());
+        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) continue;
         QString label;
         if (volumeLabel(r, &label) && label.compare(QStringLiteral("RPI-RP2"), Qt::CaseInsensitive) == 0) {
             out << makeCandidate(r, label);
@@ -174,10 +179,15 @@ QString diagnostics() {
     const QStringList roots = allDriveRoots();
     if (roots.isEmpty()) lines << QStringLiteral("Diagnostics: no logical drives are visible.");
     for (const QString& r : roots) {
+        const QString typeName = driveTypeName(r);
+        // Метку читаем только у FIXED/REMOVABLE: GetVolumeInformationW на отключённой
+        // сетевой шаре или пустом CD-ROM может блокироваться на десятки секунд,
+        // а диагностика вызывается в том числе при ошибках поиска диска.
+        const bool canRead = typeName == QLatin1String("fixed") || typeName == QLatin1String("removable");
         QString label;
-        const bool ready = volumeLabel(r, &label);
+        const bool ready = canRead && volumeLabel(r, &label);
         lines << QStringLiteral("Diagnostics: %1 type=%2 %3")
-                     .arg(r, driveTypeName(r),
+                     .arg(r, typeName,
                           ready ? QStringLiteral("label [") + label + QStringLiteral("]")
                                 : QStringLiteral("no media / not ready"));
     }
