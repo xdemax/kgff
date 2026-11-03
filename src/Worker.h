@@ -158,4 +158,7 @@ private:
     std::atomic<bool> m_cancel{false};
     bool m_permissionDenied = false;                    // только рабочий поток
     bool m_portOpenFailed = false;                      // порт не открылся или запись не удалась
+    // Порт в списке, но открыть его нельзя (DeviceNotFoundError): после MSC-сеанса Windows
+    // ещё показывает «мёртвый» COM-порт. Считаем такой порт исчезнувшим.
+    bool m_portDeviceNotFound = false;
 };

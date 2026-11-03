@@ -98,6 +98,7 @@ AtReply parseAtLines(const QByteArray& raw) {
 void Worker::guarded(const std::function<void()>& fn) {
     m_permissionDenied = false;
     m_portOpenFailed = false;
+    m_portDeviceNotFound = false;
     try {
         fn();
     } catch (const std::exception& e) {
@@ -1254,6 +1255,8 @@ bool Worker::resetPortToBootloader(const QString& portLocation) {
                     return false;
                 }
                 // Порт в списке, но открыть нельзя - ждём переподключения.
+                // Запоминаем: для doFlash это равносильно исчезнувшему порту.
+                m_portDeviceNotFound = true;
                 continue;
             }
             continue;
@@ -1900,7 +1903,11 @@ void Worker::doFlash(const Params& p) {
             // но только после подтверждения пользователя: имя порта могло измениться после
             // MSC-сеанса, и диск RPI-RP2 может принадлежать другой RP2040-плате.
             // Если же порт всё ещё в списке, но не открывается - это ошибка, а не «чужая плата».
-            const bool portGone = !m_permissionDenied && !isPortPresent(p.portLocation);
+            // Порт считаем исчезнувшим и когда его нет в списке, и когда он в списке,
+            // но открыть его нельзя (DeviceNotFoundError): после MSC-сеанса Windows
+            // ещё показывает «мёртвый» COM-порт.
+            const bool portGone = !m_permissionDenied &&
+                                  (m_portDeviceNotFound || !isPortPresent(p.portLocation));
             const QList<Platform::Candidate> boots = Platform::bootloaderDisks();
             if (portGone && boots.size() > 1) {
                 // Несколько дисков RPI-RP2: подтверждение одного из них не гарантирует,
@@ -1945,7 +1952,11 @@ void Worker::doFlash(const Params& p) {
         // чужая RP2040-плата в BOOTSEL. Если порт реально исчез (отключили кабель) и RPI-RP2
         // уже виден, продолжаем без сброса только после подтверждения пользователя.
         if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
-            const bool portGone = !m_permissionDenied && !isPortPresent(p.portLocation);
+            // Порт считаем исчезнувшим и когда его нет в списке, и когда он в списке,
+            // но открыть его нельзя (DeviceNotFoundError): после MSC-сеанса Windows
+            // ещё показывает «мёртвый» COM-порт.
+            const bool portGone = !m_permissionDenied &&
+                                  (m_portDeviceNotFound || !isPortPresent(p.portLocation));
             const QList<Platform::Candidate> boots = Platform::bootloaderDisks();
             if (portGone && boots.size() > 1) {
                 // Несколько дисков RPI-RP2: подтверждение одного из них не гарантирует,
