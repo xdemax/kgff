@@ -969,7 +969,7 @@ bool Worker::foreignBootloaderPresent(const QString& portLocation) {
 
 // Подтверждение записи на RPI-RP2, когда 1200-бод-сброс не выполнялся (порт исчез,
 // имя могло измениться после MSC-сеанса). Рядом может быть чужая RP2040-плата.
-bool Worker::confirmBootloaderDrive(const Platform::Candidate& boot) {
+bool Worker::askConfirmBootloaderDrive(const Platform::Candidate& boot) {
     bool accepted = false;
     const QString labelPart = boot.label.isEmpty() ? QStringLiteral("(no label)") : boot.label;
     const qint64 bytesTotal = QStorageInfo(boot.mountPoint).bytesTotal();
@@ -1884,7 +1884,7 @@ void Worker::doFlash(const Params& p) {
             if (portGone && !boots.isEmpty()) {
                 emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
                                         "is already available. Asking for confirmation before writing."));
-                if (!confirmBootloaderDrive(boots.first())) {
+                if (!askConfirmBootloaderDrive(boots.first())) {
                     fwStatus = QStringLiteral("failed (RPI-RP2 not confirmed)");
                     finish();
                     return;
@@ -1917,7 +1917,7 @@ void Worker::doFlash(const Params& p) {
             if (portGone && !boots.isEmpty()) {
                 emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
                                         "is already available. Asking for confirmation before writing."));
-                if (!confirmBootloaderDrive(boots.first())) {
+                if (!askConfirmBootloaderDrive(boots.first())) {
                     fwStatus = QStringLiteral("failed (RPI-RP2 not confirmed)");
                     finish();
                     return;

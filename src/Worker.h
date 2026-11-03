@@ -111,6 +111,9 @@ private:
     // принадлежит ДРУГОЙ RP2040-плате (у живого Карабаса в нормальном режиме RPI-RP2
     // быть не может). Прошивка ушла бы на чужую плату.
     bool foreignBootloaderPresent(const QString& portLocation);
+    // Спросить у пользователя подтверждение записи на найденный диск RPI-RP2
+    // (через сигнал confirmBootloaderDrive). Возвращает true, если пользователь согласился.
+    bool askConfirmBootloaderDrive(const Platform::Candidate& boot);
 
     bool waitForMountedVolume(const std::function<QList<Platform::Candidate>()>& finder,
                               int timeoutMs, Platform::Candidate* out);
