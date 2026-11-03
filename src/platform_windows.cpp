@@ -45,7 +45,7 @@ QString appDriveRoot() {
 // отдельным отказом в ejectCandidate.
 bool isUsbDrive(const QString& root) {
     if (root.size() < 2) return false;
-    const std::wstring dev = QStringLiteral("\\\\.\\") + root.left(2).toStdWString();
+    const std::wstring dev = (QStringLiteral("\\\\.\\") + root.left(2)).toStdWString();
     HANDLE h = CreateFileW(dev.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            nullptr, OPEN_EXISTING, 0, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
