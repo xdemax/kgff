@@ -85,6 +85,14 @@
 номера блоков и размеры полезной нагрузки во всех блоках), что скачан полный набор ядер и что найден именно диск платы, а не другая
 флешка. Если к компьютеру подключено несколько подходящих дисков, программа остановится и попросит оставить только плату.
 
+Перед записью на SD-карту программа проверяет её содержимое. Если на диске есть ядра `.kg1`/`.kg2`/`.kg3` или папка `backup_*`,
+запись начинается сразу. Пустая карта принимается с предупреждением в журнале. Если на диске есть файлы, но признаков Карабаса нет,
+программа показывает диалог с узлом, меткой, размером и списком файлов и просит подтвердить запись — так чужая флешка не будет
+перезаписана по ошибке.
+
+Если порт платы ещё жив, а диск `RPI-RP2` уже виден, программа считает, что в режиме загрузчика находится другая RP2040-плата,
+и останавливается с просьбой отключить её. Это защищает от прошивки чужой платы.
+
 **Ошибки порта.** Если порт не открылся или запись в него не удалась (нет прав, порт занят другой программой), программа
 сообщает об этом сразу и не ждёт появления диска. Если порт реально исчез (например, отключили кабель) и диск `RPI-RP2`
 уже виден, прошивка продолжается без 1200-бод-сброса — но только в ветке без MSC-сеанса, где имя порта не могло измениться.
@@ -122,8 +130,11 @@
   `RPI-RP2` исчезает без участия программы.
 - **Скачивание идёт медленно.** Файлы берутся с GitHub; скорость определяется вашим соединением и ничем в программе не регулируется.
 - **Журнал для разбора проблем.** Запустите программу с ключом `--log`: журнал запишется в файл
-  (Linux `~/.local/share/KarabasFlasher/flasher_log.txt`, Windows `%APPDATA%\KarabasFlasher\flasher_log.txt`,
-  macOS `~/Library/Application Support/KarabasFlasher/flasher_log.txt`). Версию программы показывает `--version` и заголовок окна.
+  `flasher_log.txt` рядом с исполняемым файлом программы. Если каталог с программой недоступен для записи
+  (например, `C:\Program Files`, `/usr/bin`, `.app` в `/Applications`), журнал сохраняется в пользовательский
+  каталог данных: Linux `~/.local/share/KarabasFlasher/flasher_log.txt`, Windows
+  `%APPDATA%\KarabasFlasher\flasher_log.txt`, macOS `~/Library/Application Support/KarabasFlasher/flasher_log.txt`.
+  Версию программы показывает `--version` и заголовок окна.
 
 ## Для разработчиков
 
@@ -227,6 +238,14 @@ family ID, block numbers and payload sizes in every block), that a complete set 
 the drive found is the board's drive and not another flash drive. If several suitable drives are connected to the
 computer, the program stops and asks you to leave only the board.
 
+Before writing to the SD card, the program inspects its contents. If the drive contains `.kg1`/`.kg2`/`.kg3` cores or a
+`backup_*` folder, writing starts immediately. An empty card is accepted with a warning in the log. If the drive has
+files but no Karabas markers, the program shows a dialog with the node, label, size and a list of files and asks you to
+confirm — so a foreign flash drive is not overwritten by mistake.
+
+If the board's port is still alive while the `RPI-RP2` drive is already visible, the program assumes another RP2040
+board is in bootloader mode and stops, asking you to disconnect it. This prevents flashing a foreign board.
+
 **Port errors.** If the port could not be opened or written to (no permission, port busy), the program reports it
 immediately and does not wait for a drive to appear. If the port has really disappeared (e.g. the cable was unplugged)
 and the `RPI-RP2` drive is already visible, flashing continues without the 1200 bps reset — but only in the branch
@@ -264,9 +283,12 @@ Package details: [docs/DEPENDENCIES_linux.txt](docs/DEPENDENCIES_linux.txt).
 - **There is no "drive ejected" message after flashing.** That is expected: the RP2040 reboots by itself and the
   `RPI-RP2` drive disappears without the program's help.
 - **Download is slow.** Files come from GitHub; the speed is determined by your connection and is not regulated by the program.
-- **Log for troubleshooting.** Run the program with the `--log` switch: the log will be written to a file
-  (Linux `~/.local/share/KarabasFlasher/flasher_log.txt`, Windows `%APPDATA%\KarabasFlasher\flasher_log.txt`,
-  macOS `~/Library/Application Support/KarabasFlasher/flasher_log.txt`). The program version is shown by `--version` and the window title.
+- **Log for troubleshooting.** Run the program with the `--log` switch: the log will be written to
+  `flasher_log.txt` next to the program's executable. If that directory is not writable (e.g. `C:\Program Files`,
+  `/usr/bin`, an `.app` in `/Applications`), the log goes to the user data directory: Linux
+  `~/.local/share/KarabasFlasher/flasher_log.txt`, Windows `%APPDATA%\KarabasFlasher\flasher_log.txt`,
+  macOS `~/Library/Application Support/KarabasFlasher/flasher_log.txt`. The program version is shown by `--version`
+  and the window title.
 
 ### For developers
 
