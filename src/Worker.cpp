@@ -981,7 +981,9 @@ bool Worker::portOpens(const QString& portLocation) {
 }
 
 bool Worker::foreignBootloaderPresent(const QString& portLocation) {
-    return portOpens(portLocation) && !Platform::bootloaderDisks().isEmpty();
+    // Сначала дешёвая проверка: если RPI-RP2 нет, открывать порт незачем.
+    if (Platform::bootloaderDisks().isEmpty()) return false;
+    return portOpens(portLocation);
 }
 
 // Подтверждение записи на RPI-RP2, когда 1200-бод-сброс не выполнялся (порт исчез,
