@@ -9,6 +9,7 @@
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
