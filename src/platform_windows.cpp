@@ -31,13 +31,46 @@ QStringList allRemovableRoots() {
     return roots;
 }
 
-// true, если в диске есть готовый носитель (том читается)
+// true, если в диске есть готовый носитель (том читается).
+// Сразу после появления буквы Windows может ещё не дочитать метку тома
+// (GetVolumeInformationW возвращает ошибку) - поэтому несколько попыток.
 bool volumeLabel(const QString& root, QString* label) {
     wchar_t buf[MAX_PATH + 1] = { 0 };
     const std::wstring w = nativeRoot(root).toStdWString();
-    if (!GetVolumeInformationW(w.c_str(), buf, MAX_PATH + 1, nullptr, nullptr, nullptr, nullptr, 0)) return false;
-    if (label) *label = QString::fromWCharArray(buf);
-    return true;
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        if (GetVolumeInformationW(w.c_str(), buf, MAX_PATH + 1, nullptr, nullptr, nullptr, nullptr, 0)) {
+            if (label) *label = QString::fromWCharArray(buf);
+            return true;
+        }
+        QThread::msleep(200);
+    }
+    return false;
+}
+
+// Все логические диски (буквы), независимо от типа. Нужно для поиска RPI-RP2:
+// RP2040 в BOOTSEL на Windows иногда определяется как DRIVE_FIXED, а не DRIVE_REMOVABLE.
+QStringList allDriveRoots() {
+    QStringList roots;
+    wchar_t buf[512] = { 0 };
+    const DWORD n = GetLogicalDriveStringsW(511, buf);
+    if (n == 0 || n > 511) return roots;
+    for (const wchar_t* d = buf; *d; d += std::wcslen(d) + 1) {
+        roots << QDir::fromNativeSeparators(QString::fromWCharArray(d));
+    }
+    return roots;
+}
+
+QString driveTypeName(const QString& root) {
+    const std::wstring w = nativeRoot(root).toStdWString();
+    switch (GetDriveTypeW(w.c_str())) {
+    case DRIVE_REMOVABLE: return QStringLiteral("removable");
+    case DRIVE_FIXED:     return QStringLiteral("fixed");
+    case DRIVE_REMOTE:    return QStringLiteral("remote");
+    case DRIVE_CDROM:     return QStringLiteral("cdrom");
+    case DRIVE_RAMDISK:   return QStringLiteral("ramdisk");
+    case DRIVE_NO_ROOT_DIR: return QStringLiteral("no-root");
+    default:              return QStringLiteral("unknown");
+    }
 }
 
 Candidate makeCandidate(const QString& root, const QString& label) {
@@ -75,7 +108,9 @@ QList<Candidate> newDisks(const QSet<QString>& before) {
 
 QList<Candidate> bootloaderDisks() {
     QList<Candidate> out;
-    for (const QString& r : allRemovableRoots()) {
+    // Ищем по метке среди ВСЕХ логических дисков: RP2040 в BOOTSEL на Windows
+    // иногда определяется как DRIVE_FIXED, и фильтр по DRIVE_REMOVABLE его терял.
+    for (const QString& r : allDriveRoots()) {
         QString label;
         if (volumeLabel(r, &label) && label.compare(QStringLiteral("RPI-RP2"), Qt::CaseInsensitive) == 0) {
             out << makeCandidate(r, label);
@@ -136,13 +171,15 @@ int cleanupVolumeJunk(const QString&, const QStringList&) {
 
 QString diagnostics() {
     QStringList lines;
-    const QStringList roots = allRemovableRoots();
-    if (roots.isEmpty()) lines << QStringLiteral("Diagnostics: no removable drives are visible.");
+    const QStringList roots = allDriveRoots();
+    if (roots.isEmpty()) lines << QStringLiteral("Diagnostics: no logical drives are visible.");
     for (const QString& r : roots) {
         QString label;
         const bool ready = volumeLabel(r, &label);
-        lines << QStringLiteral("Diagnostics: %1 %2").arg(r, ready ? QStringLiteral("label [") + label + QStringLiteral("]")
-                                                                 : QStringLiteral("no media / not ready"));
+        lines << QStringLiteral("Diagnostics: %1 type=%2 %3")
+                     .arg(r, driveTypeName(r),
+                          ready ? QStringLiteral("label [") + label + QStringLiteral("]")
+                                : QStringLiteral("no media / not ready"));
     }
     return lines.join(QLatin1Char('\n'));
 }
