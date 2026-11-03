@@ -164,6 +164,17 @@ bool ejectCandidate(const Candidate& c, QString* detail) {
     auto setDetail = [&](const QString& s) { if (detail) *detail = s; };
     setDetail(QString());
 
+    // SD-карта Карабаса в режиме MSC может определяться как DRIVE_FIXED (RP2040 иногда
+    // так перечисляется), поэтому FIXED попадает в кандидаты. Но извлекать внутренний
+    // жёсткий диск нельзя: LOCK+DISMOUNT на простаивающем системном томе - опасная
+    // операция. Отказываемся явно, а не пытаемся извлечь.
+    const std::wstring root = nativeRoot(c.mountPoint).toStdWString();
+    if (GetDriveTypeW(root.c_str()) == DRIVE_FIXED) {
+        setDetail(QStringLiteral("refusing to eject a fixed drive (%1); it is not a removable SD card")
+                      .arg(c.mountPoint));
+        return false;
+    }
+
     const std::wstring vol = c.node.toStdWString();
     HANDLE h = CreateFileW(vol.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            nullptr, OPEN_EXISTING, 0, nullptr);
