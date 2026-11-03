@@ -963,8 +963,25 @@ void Worker::doDownload(const Params& p) {
 // ----------------------------------------------------------------------------
 // Последовательный порт
 // ----------------------------------------------------------------------------
+// Реальная проба: открыть порт и сразу закрыть, ничего не записывая.
+// isPortPresent() недостаточно: после MSC-сеанса Windows может ещё показывать
+// «мёртвый» COM-порт в списке, и проверка дала бы ложное «чужая плата».
+bool Worker::portOpens(const QString& portLocation) {
+    if (portLocation.isEmpty()) return false;
+    QSerialPort sp;
+    sp.setPortName(portLocation);
+    sp.setBaudRate(QSerialPort::Baud115200);
+    sp.setDataBits(QSerialPort::Data8);
+    sp.setParity(QSerialPort::NoParity);
+    sp.setStopBits(QSerialPort::OneStop);
+    sp.setFlowControl(QSerialPort::NoFlowControl);
+    if (!sp.open(QIODevice::ReadWrite)) return false;
+    sp.close();
+    return true;
+}
+
 bool Worker::foreignBootloaderPresent(const QString& portLocation) {
-    return isPortPresent(portLocation) && !Platform::bootloaderDisks().isEmpty();
+    return portOpens(portLocation) && !Platform::bootloaderDisks().isEmpty();
 }
 
 // Подтверждение записи на RPI-RP2, когда 1200-бод-сброс не выполнялся (порт исчез,

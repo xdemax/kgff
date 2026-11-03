@@ -107,9 +107,13 @@ private:
     bool queryVersion(const QString& portLocation, QString* raw, int* board);
     bool resetPortToBootloader(const QString& portLocation);
     bool isPortPresent(const QString& portLocation);
-    // true, если порт Карабаса ещё жив, а диск RPI-RP2 уже виден: значит, этот диск
-    // принадлежит ДРУГОЙ RP2040-плате (у живого Карабаса в нормальном режиме RPI-RP2
-    // быть не может). Прошивка ушла бы на чужую плату.
+    // Реальная проба: открыть порт и сразу закрыть, ничего не записывая.
+    // isPortPresent() недостаточно: после MSC-сеанса Windows может ещё показывать
+    // «мёртвый» COM-порт в списке, и проверка дала бы ложное «чужая плата».
+    bool portOpens(const QString& portLocation);
+    // true, если порт Карабаса ещё жив (реально открывается), а диск RPI-RP2 уже виден:
+    // значит, этот диск принадлежит ДРУГОЙ RP2040-плате (у живого Карабаса в нормальном
+    // режиме RPI-RP2 быть не может). Прошивка ушла бы на чужую плату.
     bool foreignBootloaderPresent(const QString& portLocation);
     // Спросить у пользователя подтверждение записи на найденный диск RPI-RP2
     // (через сигнал confirmBootloaderDrive). Возвращает true, если пользователь согласился.
