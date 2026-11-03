@@ -1900,6 +1900,18 @@ void Worker::doFlash(const Params& p) {
             // Если же порт всё ещё в списке, но не открывается - это ошибка, а не «чужая плата».
             const bool portGone = !m_permissionDenied && !isPortPresent(p.portLocation);
             const QList<Platform::Candidate> boots = Platform::bootloaderDisks();
+            if (portGone && boots.size() > 1) {
+                // Несколько дисков RPI-RP2: подтверждение одного из них не гарантирует,
+                // что прошивка уйдёт на нужную плату. Отказываемся и просим оставить одну.
+                QStringList nodes;
+                for (const Platform::Candidate& c : boots) nodes << c.node;
+                emit log(QStringLiteral("Error: More than one RPI-RP2 bootloader drive is present (%1). "
+                                        "Disconnect the other RP2040 boards and press FLASH again.")
+                             .arg(nodes.join(QStringLiteral(", "))));
+                fwStatus = QStringLiteral("failed (multiple RPI-RP2)");
+                finish();
+                return;
+            }
             if (portGone && !boots.isEmpty()) {
                 emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
                                         "is already available. Asking for confirmation before writing."));
@@ -1933,6 +1945,18 @@ void Worker::doFlash(const Params& p) {
         if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
             const bool portGone = !m_permissionDenied && !isPortPresent(p.portLocation);
             const QList<Platform::Candidate> boots = Platform::bootloaderDisks();
+            if (portGone && boots.size() > 1) {
+                // Несколько дисков RPI-RP2: подтверждение одного из них не гарантирует,
+                // что прошивка уйдёт на нужную плату. Отказываемся и просим оставить одну.
+                QStringList nodes;
+                for (const Platform::Candidate& c : boots) nodes << c.node;
+                emit log(QStringLiteral("Error: More than one RPI-RP2 bootloader drive is present (%1). "
+                                        "Disconnect the other RP2040 boards and press FLASH again.")
+                             .arg(nodes.join(QStringLiteral(", "))));
+                fwStatus = QStringLiteral("failed (multiple RPI-RP2)");
+                finish();
+                return;
+            }
             if (portGone && !boots.isEmpty()) {
                 emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
                                         "is already available. Asking for confirmation before writing."));
