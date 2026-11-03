@@ -241,13 +241,29 @@ void MainWindow::stopThread() {
 }
 
 void MainWindow::openLogFile() {
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(dir);
-    m_logFile.setFileName(dir + QStringLiteral("/flasher_log.txt"));
+    // Основной путь - рядом с исполняемым файлом (как просили пользователи Windows:
+    // лог должен лежать в каталоге с программой, а не в AppData).
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString primary = appDir + QStringLiteral("/flasher_log.txt");
+
+    m_logFile.setFileName(primary);
     if (m_logFile.open(QIODevice::Append)) {
         m_logFile.write("--- Application started with -log switch ---\n");
         m_logFile.flush();
         appendLog("Logging to file: " + m_logFile.fileName());
+        return;
+    }
+
+    // Каталог с программой недоступен для записи (Program Files, /usr/bin, .app в /Applications).
+    // Откатываемся на пользовательский каталог данных.
+    const QString fallbackDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(fallbackDir);
+    m_logFile.setFileName(fallbackDir + QStringLiteral("/flasher_log.txt"));
+    if (m_logFile.open(QIODevice::Append)) {
+        m_logFile.write("--- Application started with -log switch ---\n");
+        m_logFile.flush();
+        appendLog("Warning: Cannot write the log next to the program (" + primary +
+                  "); logging to " + m_logFile.fileName() + " instead.");
     } else {
         appendLog("Warning: Could not open the log file " + m_logFile.fileName() + "; file logging is disabled.");
     }
