@@ -38,9 +38,40 @@ QString appDriveRoot() {
     return path.left(2) + QLatin1Char('/');
 }
 
-// Диски-кандидаты для SD-карты Карабаса: FIXED и REMOVABLE, кроме системного диска
-// и диска, на котором лежит сама программа. RP2040 в режиме MSC на Windows иногда
-// определяется как DRIVE_FIXED, поэтому фильтр только по DRIVE_REMOVABLE терял карту.
+// true, если диск подключён по шине USB. Запрашиваем STORAGE_DEVICE_DESCRIPTOR
+// у физического диска (буква + ":") и смотрим BusType. Нужно, чтобы отличить
+// SD-карту Карабаса в режиме MSC (RP2040 иногда перечисляется как DRIVE_FIXED)
+// от внутреннего жёсткого диска: внутренние диски исключаются целиком, а не
+// отдельным отказом в ejectCandidate.
+bool isUsbDrive(const QString& root) {
+    if (root.size() < 2) return false;
+    const std::wstring dev = QStringLiteral("\\\\.\\") + root.left(2).toStdWString();
+    HANDLE h = CreateFileW(dev.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+
+    STORAGE_PROPERTY_QUERY query;
+    ZeroMemory(&query, sizeof(query));
+    query.PropertyId = StorageDeviceProperty;
+    query.QueryType = PropertyStandardQuery;
+
+    STORAGE_DEVICE_DESCRIPTOR desc;
+    ZeroMemory(&desc, sizeof(desc));
+    DWORD returned = 0;
+    const BOOL ok = DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY,
+                                    &query, sizeof(query),
+                                    &desc, sizeof(desc),
+                                    &returned, nullptr);
+    CloseHandle(h);
+    if (!ok || returned < sizeof(desc)) return false;
+    return desc.BusType == BusTypeUsb;
+}
+
+// Диски-кандидаты для SD-карты Карабаса: REMOVABLE и USB-FIXED, кроме системного
+// диска и диска, на котором лежит сама программа. RP2040 в режиме MSC на Windows
+// иногда определяется как DRIVE_FIXED, поэтому фильтр только по DRIVE_REMOVABLE
+// терял карту. Внутренние FIXED-диски (не USB) исключаются целиком: их нельзя
+// ни принять за карту, ни случайно размонтировать.
 // Сетевые (DRIVE_REMOTE), CD-ROM и диски без корневого каталога пропускаем: чтение
 // метки на отключённой шаре может блокироваться на десятки секунд.
 // Запись на чужой диск дополнительно страхует Worker::confirmDrive().
@@ -57,6 +88,7 @@ QStringList candidateRoots() {
         const QString r = QDir::fromNativeSeparators(QString::fromWCharArray(d));
         if (!sys.isEmpty() && r.compare(sys, Qt::CaseInsensitive) == 0) continue;
         if (!app.isEmpty() && r.compare(app, Qt::CaseInsensitive) == 0) continue;
+        if (type == DRIVE_FIXED && !isUsbDrive(r)) continue;   // внутренний диск
         roots << r;
     }
     return roots;
@@ -138,15 +170,17 @@ QList<Candidate> newDisks(const QSet<QString>& before) {
 
 QList<Candidate> bootloaderDisks() {
     QList<Candidate> out;
-    // Ищем по метке среди логических дисков типов FIXED и REMOVABLE: RP2040 в BOOTSEL
+    // Ищем по метке среди логических дисков типов REMOVABLE и USB-FIXED: RP2040 в BOOTSEL
     // на Windows иногда определяется как DRIVE_FIXED, и фильтр только по DRIVE_REMOVABLE
-    // его терял. Сетевые (DRIVE_REMOTE), CD-ROM и диски без корневого каталога
-    // пропускаем: GetVolumeInformationW на отключённой сетевой шаре может блокироваться
-    // на десятки секунд, а bootloaderDisks() вызывается перед каждой прошивкой.
+    // его терял. Внутренние FIXED-диски (не USB) пропускаем: RPI-RP2 на них быть не может.
+    // Сетевые (DRIVE_REMOTE), CD-ROM и диски без корневого каталога тоже пропускаем:
+    // GetVolumeInformationW на отключённой сетевой шаре может блокироваться на десятки
+    // секунд, а bootloaderDisks() вызывается перед каждой прошивкой.
     for (const QString& r : allDriveRoots()) {
         const std::wstring w = nativeRoot(r).toStdWString();
         const UINT type = GetDriveTypeW(w.c_str());
         if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) continue;
+        if (type == DRIVE_FIXED && !isUsbDrive(r)) continue;   // внутренний диск
         QString label;
         if (volumeLabel(r, &label) && label.compare(QStringLiteral("RPI-RP2"), Qt::CaseInsensitive) == 0) {
             out << makeCandidate(r, label);
@@ -164,17 +198,9 @@ bool ejectCandidate(const Candidate& c, QString* detail) {
     auto setDetail = [&](const QString& s) { if (detail) *detail = s; };
     setDetail(QString());
 
-    // SD-карта Карабаса в режиме MSC может определяться как DRIVE_FIXED (RP2040 иногда
-    // так перечисляется), поэтому FIXED попадает в кандидаты. Но извлекать внутренний
-    // жёсткий диск нельзя: LOCK+DISMOUNT на простаивающем системном томе - опасная
-    // операция. Отказываемся явно, а не пытаемся извлечь.
-    const std::wstring root = nativeRoot(c.mountPoint).toStdWString();
-    if (GetDriveTypeW(root.c_str()) == DRIVE_FIXED) {
-        setDetail(QStringLiteral("refusing to eject a fixed drive (%1); it is not a removable SD card")
-                      .arg(c.mountPoint));
-        return false;
-    }
-
+    // Внутренние FIXED-диски в кандидаты не попадают (см. candidateRoots/isUsbDrive),
+    // поэтому здесь можно извлекать любой найденный диск: это либо REMOVABLE, либо
+    // USB-FIXED (SD-карта Карабаса в режиме MSC).
     const std::wstring vol = c.node.toStdWString();
     HANDLE h = CreateFileW(vol.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            nullptr, OPEN_EXISTING, 0, nullptr);
