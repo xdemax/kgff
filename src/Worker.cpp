@@ -967,6 +967,20 @@ bool Worker::foreignBootloaderPresent(const QString& portLocation) {
     return isPortPresent(portLocation) && !Platform::bootloaderDisks().isEmpty();
 }
 
+// Подтверждение записи на RPI-RP2, когда 1200-бод-сброс не выполнялся (порт исчез,
+// имя могло измениться после MSC-сеанса). Рядом может быть чужая RP2040-плата.
+bool Worker::confirmBootloaderDrive(const Platform::Candidate& boot) {
+    bool accepted = false;
+    const QString labelPart = boot.label.isEmpty() ? QStringLiteral("(no label)") : boot.label;
+    const qint64 bytesTotal = QStorageInfo(boot.mountPoint).bytesTotal();
+    emit confirmBootloaderDrive(boot.node, labelPart, bytesTotal, &accepted);
+    if (!accepted) {
+        emit log(QStringLiteral("Error: Writing to the RPI-RP2 drive %1 [%2] was not confirmed. "
+                                "Nothing was written to it.").arg(boot.node, labelPart));
+    }
+    return accepted;
+}
+
 bool Worker::isPortPresent(const QString& portLocation) {
     const QList<QSerialPortInfo> ports = QSerialPortInfo::availablePorts();
     for (const QSerialPortInfo& i : ports) {
@@ -1859,14 +1873,22 @@ void Worker::doFlash(const Params& p) {
         }
         // Сначала пробуем сброс: если порт Карабаса живой, он всегда должен сработать.
         // В ветке с MSC-сеансом имя порта могло измениться, поэтому продолжать без сброса
-        // нельзя: рядом в BOOTSEL может оказаться чужая плата. Прерываемся с подсказкой.
+        // нельзя без подтверждения: рядом в BOOTSEL может оказаться чужая плата.
         if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
-            // Порт мог исчезнуть из списка (плата уже в BOOTSEL) - тогда продолжаем без сброса.
+            // Порт мог исчезнуть из списка (плата уже в BOOTSEL) - тогда продолжаем без сброса,
+            // но только после подтверждения пользователя: имя порта могло измениться после
+            // MSC-сеанса, и диск RPI-RP2 может принадлежать другой RP2040-плате.
             // Если же порт всё ещё в списке, но не открывается - это ошибка, а не «чужая плата».
             const bool portGone = !m_permissionDenied && !isPortPresent(p.portLocation);
-            if (portGone && !Platform::bootloaderDisks().isEmpty()) {
+            const QList<Platform::Candidate> boots = Platform::bootloaderDisks();
+            if (portGone && !boots.isEmpty()) {
                 emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
-                                        "is already available; continuing without the 1200 bps reset."));
+                                        "is already available. Asking for confirmation before writing."));
+                if (!confirmBootloaderDrive(boots.first())) {
+                    fwStatus = QStringLiteral("failed (RPI-RP2 not confirmed)");
+                    finish();
+                    return;
+                }
             } else {
                 emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                         "Aborting before flashing."));
@@ -1886,13 +1908,20 @@ void Worker::doFlash(const Params& p) {
             finish();
             return;
         }
-        // Ветка без MSC-сеанса: имя порта не менялось, поэтому если порт реально исчез
-        // (отключили кабель) и RPI-RP2 уже виден, продолжаем без сброса.
+        // Ветка без MSC-сеанса: имя порта не менялось, но рядом всё равно может оказаться
+        // чужая RP2040-плата в BOOTSEL. Если порт реально исчез (отключили кабель) и RPI-RP2
+        // уже виден, продолжаем без сброса только после подтверждения пользователя.
         if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
             const bool portGone = !m_permissionDenied && !isPortPresent(p.portLocation);
-            if (portGone && !Platform::bootloaderDisks().isEmpty()) {
+            const QList<Platform::Candidate> boots = Platform::bootloaderDisks();
+            if (portGone && !boots.isEmpty()) {
                 emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
-                                        "is already available; continuing without the 1200 bps reset."));
+                                        "is already available. Asking for confirmation before writing."));
+                if (!confirmBootloaderDrive(boots.first())) {
+                    fwStatus = QStringLiteral("failed (RPI-RP2 not confirmed)");
+                    finish();
+                    return;
+                }
             } else {
                 emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                         "Aborting before flashing."));

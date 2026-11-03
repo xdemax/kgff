@@ -41,6 +41,8 @@ private slots:
     void onOpenFolder(const QString& path);
     void onConfirmUnrecognizedDrive(const QString& node, const QString& label, qint64 bytesTotal,
                                     const QStringList& sampleFiles, bool* accepted);
+    void onConfirmBootloaderDrive(const QString& node, const QString& label, qint64 bytesTotal,
+                                  bool* accepted);
 
 private:
     Params collectParams() const;

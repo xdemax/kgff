@@ -17,16 +17,47 @@ namespace {
 
 QString nativeRoot(const QString& root) { return QDir::toNativeSeparators(root); }
 
-// Все съёмные диски (буквы), в том числе без носителя. Формат: "D:/"
-QStringList allRemovableRoots() {
+// Буква системного диска (там, где стоит Windows), например "C:/". Пусто, если
+// определить не удалось. Нужна, чтобы не принять системный диск за SD-карту Карабаса.
+QString systemDriveRoot() {
+    wchar_t win[MAX_PATH + 1] = { 0 };
+    const UINT n = GetWindowsDirectoryW(win, MAX_PATH);
+    if (n == 0 || n > MAX_PATH) return QString();
+    const QString path = QDir::fromNativeSeparators(QString::fromWCharArray(win));
+    if (path.size() < 2 || path.at(1) != QLatin1Char(':')) return QString();
+    return path.left(2) + QLatin1Char('/');
+}
+
+// Буква диска, на котором лежит сама программа. Пусто, если определить не удалось.
+QString appDriveRoot() {
+    wchar_t exe[MAX_PATH + 1] = { 0 };
+    const DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    if (n == 0 || n > MAX_PATH) return QString();
+    const QString path = QDir::fromNativeSeparators(QString::fromWCharArray(exe));
+    if (path.size() < 2 || path.at(1) != QLatin1Char(':')) return QString();
+    return path.left(2) + QLatin1Char('/');
+}
+
+// Диски-кандидаты для SD-карты Карабаса: FIXED и REMOVABLE, кроме системного диска
+// и диска, на котором лежит сама программа. RP2040 в режиме MSC на Windows иногда
+// определяется как DRIVE_FIXED, поэтому фильтр только по DRIVE_REMOVABLE терял карту.
+// Сетевые (DRIVE_REMOTE), CD-ROM и диски без корневого каталога пропускаем: чтение
+// метки на отключённой шаре может блокироваться на десятки секунд.
+// Запись на чужой диск дополнительно страхует Worker::confirmDrive().
+QStringList candidateRoots() {
     QStringList roots;
+    const QString sys = systemDriveRoot();
+    const QString app = appDriveRoot();
     wchar_t buf[512] = { 0 };
     const DWORD n = GetLogicalDriveStringsW(511, buf);
     if (n == 0 || n > 511) return roots;
     for (const wchar_t* d = buf; *d; d += std::wcslen(d) + 1) {
-        if (GetDriveTypeW(d) == DRIVE_REMOVABLE) {
-            roots << QDir::fromNativeSeparators(QString::fromWCharArray(d));
-        }
+        const UINT type = GetDriveTypeW(d);
+        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) continue;
+        const QString r = QDir::fromNativeSeparators(QString::fromWCharArray(d));
+        if (!sys.isEmpty() && r.compare(sys, Qt::CaseInsensitive) == 0) continue;
+        if (!app.isEmpty() && r.compare(app, Qt::CaseInsensitive) == 0) continue;
+        roots << r;
     }
     return roots;
 }
@@ -86,7 +117,7 @@ Candidate makeCandidate(const QString& root, const QString& label) {
 
 QSet<QString> readyRemovableDisks() {
     QSet<QString> ready;
-    for (const QString& r : allRemovableRoots()) {
+    for (const QString& r : candidateRoots()) {
         if (volumeLabel(r, nullptr)) ready.insert(r);   // буква без носителя в снимок не входит
     }
     return ready;
@@ -94,7 +125,7 @@ QSet<QString> readyRemovableDisks() {
 
 QList<Candidate> newDisks(const QSet<QString>& before) {
     QList<Candidate> out;
-    for (const QString& r : allRemovableRoots()) {
+    for (const QString& r : candidateRoots()) {
         if (before.contains(r)) continue;
         QString label;
         if (!volumeLabel(r, &label)) continue;                                   // носитель ещё не готов
