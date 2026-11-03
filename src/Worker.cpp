@@ -1217,6 +1217,13 @@ bool Worker::resetPortToBootloader(const QString& portLocation) {
             }
             emit logVerbose(QStringLiteral("Port is not ready yet, retrying 1200 bps reset (%1/%2)...")
                                 .arg(attempt + 1).arg(kAttempts));
+            // Каждые 5 попыток пишем и в обычный лог: без --log сообщения logVerbose
+            // не видны, и при «мёртвом» COM-порте пользователь до 30 секунд не понимает,
+            // что программа ждёт переподключения устройства.
+            if (attempt % 5 == 0) {
+                emit log(QStringLiteral("Waiting for the serial port %1 to become available again "
+                                        "(%2/%3)...").arg(portLocation).arg(attempt + 1).arg(kAttempts));
+            }
             QThread::msleep(1000);
         }
 
