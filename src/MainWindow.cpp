@@ -189,6 +189,7 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     m_worker->moveToThread(m_thread);
     connect(m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
     connect(m_worker, &Worker::log, this, &MainWindow::appendLog);
+    connect(m_worker, &Worker::logVerbose, this, &MainWindow::appendLogVerbose);
     connect(m_worker, &Worker::firmwareReady, this, &MainWindow::onFirmwareReady);
     connect(m_worker, &Worker::finished, this, &MainWindow::onWorkerFinished);
     connect(m_worker, &Worker::portAccessDenied, this, &MainWindow::onPortAccessDenied);
@@ -270,6 +271,13 @@ void MainWindow::openLogFile() {
     }
 }
 
+void MainWindow::writeLogLine(const QString& line) {
+    if (m_logFile.isOpen()) {
+        m_logFile.write((line + QLatin1Char('\n')).toUtf8());
+        m_logFile.flush();
+    }
+}
+
 void MainWindow::appendLog(const QString& message) {
     const QString line = "[" + QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss") + "] " + message;
 
@@ -285,11 +293,14 @@ void MainWindow::appendLog(const QString& message) {
     const QString style = color.isEmpty() ? QStringLiteral("white-space:pre-wrap;")
                                           : "white-space:pre-wrap;color:" + color + ";";
     m_log->appendHtml("<span style=\"" + style + "\">" + line.toHtmlEscaped() + "</span>");
+    writeLogLine(line);
+}
 
-    if (m_logFile.isOpen()) {
-        m_logFile.write((line + QLatin1Char('\n')).toUtf8());
-        m_logFile.flush();
-    }
+// Подробные сообщения идут только в файл журнала: в окне они не нужны и мешают
+// читать ход операции. Если файл не открыт (запуск без --log), они теряются.
+void MainWindow::appendLogVerbose(const QString& message) {
+    const QString line = "[" + QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss") + "] " + message;
+    writeLogLine(line);
 }
 
 Params MainWindow::collectParams() const {

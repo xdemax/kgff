@@ -34,6 +34,7 @@ private slots:
     void onDetectModel();
     void onModelDetected(int modelIndex, const QString& raw);
     void appendLog(const QString& message);
+    void appendLogVerbose(const QString& message);
     void onFirmwareReady(const QString& path);
     void onWorkerFinished();
     void onPortAccessDenied(const QString& portLocation);
@@ -47,6 +48,7 @@ private:
     void applyOptionState();            // доступность поля прошивки зависит от галки Update firmware
     void updateActionState();           // доступность FLASH!/MSC по наличию входных данных
     void openLogFile();
+    void writeLogLine(const QString& line);
     void cleanupTemp();
     void stopThread();
 

@@ -42,6 +42,9 @@ public:
 
 signals:
     void log(const QString& message);
+    // Подробные сообщения (диагностика, повторы, служебные шаги): пишутся только в файл
+    // журнала, в окно не выводятся, чтобы не засорять его.
+    void logVerbose(const QString& message);
     void firmwareReady(const QString& path);
     void finished();                                    // операция завершена (успешно или нет)
     void portAccessDenied(const QString& portLocation); // нет прав на порт (Linux)

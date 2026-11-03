@@ -684,12 +684,12 @@ QList<Worker::JobResult> Worker::downloadFiles(const QList<DownloadJob>& jobs, i
 
         const QString& name = jobs[a.index].name;
         if (r.ok) {
-            emit log("Downloaded core: " + name + " (" + QString::number(a.bytes / 1024) + " KB, " +
-                     QString::number(a.timer.elapsed() / 1000.0, 'f', 1) + " s)");
+            emit logVerbose("Downloaded core: " + name + " (" + QString::number(a.bytes / 1024) + " KB, " +
+                            QString::number(a.timer.elapsed() / 1000.0, 'f', 1) + " s)");
         } else if (!m_cancel.load()) {
             // Одна повторная попытка на файл: сетевые сбои обычно временные
             if (a.attempt < 1) {
-                emit log("Retrying core: " + name + " (" + r.error + ")");
+                emit logVerbose("Retrying core: " + name + " (" + r.error + ")");
                 results[a.index] = JobResult();     // сброс результата
                 results[a.index].error = QStringLiteral("cancelled");
                 // Запускаем повторную загрузку этого файла напрямую (без изменения next)
@@ -886,7 +886,7 @@ void Worker::doDownload(const Params& p) {
     QElapsedTimer listTimer;
     listTimer.start();
     const QStringList cores = fetchCoresList(m);
-    emit log("Cores list request took " + QString::number(listTimer.elapsed() / 1000.0, 'f', 1) + " s.");
+    emit logVerbose("Cores list request took " + QString::number(listTimer.elapsed() / 1000.0, 'f', 1) + " s.");
     if (m_cancel.load()) {
         emit log(QStringLiteral("Operation cancelled by user."));
         return;
@@ -1020,9 +1020,9 @@ bool Worker::sendAtCommand(const QString& portLocation, const QByteArray& cmd,
     sp.setDataTerminalReady(true);
     sp.setRequestToSend(true);
     QThread::msleep(300);       // дать прошивке заметить подключение
-    emit log(QStringLiteral("Diagnostics: port opened, DTR=%1 RTS=%2.")
-                .arg(sp.isDataTerminalReady() ? QStringLiteral("on") : QStringLiteral("off"))
-                .arg(sp.isRequestToSend() ? QStringLiteral("on") : QStringLiteral("off")));
+    emit logVerbose(QStringLiteral("Diagnostics: port opened, DTR=%1 RTS=%2.")
+                        .arg(sp.isDataTerminalReady() ? QStringLiteral("on") : QStringLiteral("off"))
+                        .arg(sp.isRequestToSend() ? QStringLiteral("on") : QStringLiteral("off")));
 
     if (sp.write(cmd) != cmd.size() || !sp.waitForBytesWritten(2000)) {
         emit log(QStringLiteral("Error: Failed to write data to the serial port."));
@@ -1063,11 +1063,11 @@ bool Worker::sendAtCommand(const QString& portLocation, const QByteArray& cmd,
     // Диагностика: сколько байт реально пришло и что именно (для отладки проблем
     // с USB-CDC на Windows). Если buf пуст - устройство не ответило вообще.
     if (buf.isEmpty()) {
-        emit log(QStringLiteral("Diagnostics: no bytes received from the device (port open, command written)."));
+        emit logVerbose(QStringLiteral("Diagnostics: no bytes received from the device (port open, command written)."));
     } else {
-        emit log(QStringLiteral("Diagnostics: received %1 bytes: %2")
-                    .arg(buf.size())
-                    .arg(QString::fromUtf8(buf.left(200)).trimmed()));
+        emit logVerbose(QStringLiteral("Diagnostics: received %1 bytes: %2")
+                            .arg(buf.size())
+                            .arg(QString::fromUtf8(buf.left(200)).trimmed()));
     }
     if (resp) *resp = buf;
     return !buf.isEmpty();
@@ -1181,8 +1181,8 @@ bool Worker::resetPortToBootloader(const QString& portLocation) {
                 emit log("Port " + portLocation + " is no longer present; stopping the 1200 bps reset retries.");
                 return false;
             }
-            emit log(QStringLiteral("Port is not ready yet, retrying 1200 bps reset (%1/%2)...")
-                         .arg(attempt + 1).arg(kAttempts));
+            emit logVerbose(QStringLiteral("Port is not ready yet, retrying 1200 bps reset (%1/%2)...")
+                                .arg(attempt + 1).arg(kAttempts));
             QThread::msleep(1000);
         }
 
@@ -1381,7 +1381,8 @@ Worker::MscResult Worker::updateCoresOnSd(const ModelInfo& m, const QString& por
     {
         QStringList list = before.values();
         list.sort();
-        emit log("USB disks with media before switch: " + (list.isEmpty() ? QStringLiteral("none") : list.join(", ")));
+        emit logVerbose("USB disks with media before switch: " +
+                        (list.isEmpty() ? QStringLiteral("none") : list.join(", ")));
     }
 
     // Ядра всегда лежат на карте №1, поэтому режим MSC фиксирован.
