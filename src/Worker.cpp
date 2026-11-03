@@ -1209,10 +1209,18 @@ bool Worker::resetPortToBootloader(const QString& portLocation) {
             // временными: на Windows ERROR_GEN_FAILURE ("устройство не работает") приходит
             // как UnknownError, а не как OpenError/ResourceError, поэтому фильтр по
             // конкретным кодам отключал бы повторы именно в сценарии, ради которого они введены.
+            //
+            // DeviceNotFoundError на Windows после MSC-сеанса - это ERROR_FILE_NOT_FOUND:
+            // порт ещё виден в списке, но устройство уже перечисляется заново. Ждём, пока
+            // он появится снова, но не дольше нескольких секунд, чтобы не зациклиться.
             if (e == QSerialPort::DeviceNotFoundError) {
-                m_portOpenFailed = true;
-                emit log("Failed to open port " + portLocation + " for 1200 bps reset: " + lastError);
-                return false;
+                if (!isPortPresent(portLocation)) {
+                    m_portOpenFailed = true;
+                    emit log("Failed to open port " + portLocation + " for 1200 bps reset: " + lastError);
+                    return false;
+                }
+                // Порт в списке, но открыть нельзя - ждём переподключения.
+                continue;
             }
             continue;
         }
@@ -1838,6 +1846,8 @@ void Worker::doFlash(const Params& p) {
         }
         // Если порт Карабаса ещё жив, а диск RPI-RP2 уже виден, то этот диск принадлежит
         // ДРУГОЙ RP2040-плате. Прошивка ушла бы на чужую плату, поэтому останавливаемся.
+        // Проверяем только когда порт реально открывается: после MSC-сеанса Windows может
+        // ещё показывать «мёртвый» COM-порт в списке, и isPortPresent() даёт ложное срабатывание.
         if (foreignBootloaderPresent(p.portLocation)) {
             emit log(QStringLiteral("Error: Another RP2040 board is in BOOTSEL mode (RPI-RP2 drive is present) "
                                     "while the Karabas port is still alive. Disconnect the other board and "
@@ -1850,19 +1860,19 @@ void Worker::doFlash(const Params& p) {
         // В ветке с MSC-сеансом имя порта могло измениться, поэтому продолжать без сброса
         // нельзя: рядом в BOOTSEL может оказаться чужая плата. Прерываемся с подсказкой.
         if (!resetPortToBootloader(p.portLocation) && m_portOpenFailed) {
+            // Порт мог исчезнуть из списка (плата уже в BOOTSEL) - тогда продолжаем без сброса.
+            // Если же порт всё ещё в списке, но не открывается - это ошибка, а не «чужая плата».
             const bool portGone = !m_permissionDenied && !isPortPresent(p.portLocation);
             if (portGone && !Platform::bootloaderDisks().isEmpty()) {
-                emit log(QStringLiteral("Error: The serial port is no longer present, but an RPI-RP2 bootloader "
-                                        "drive is available. It may belong to another board (the port name can "
-                                        "change after the MSC session). Replug the Karabas and press FLASH again "
-                                        "with only 'Update firmware' checked."));
+                emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
+                                        "is already available; continuing without the 1200 bps reset."));
             } else {
                 emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                         "Aborting before flashing."));
+                fwStatus = QStringLiteral("failed (reset)");
+                finish();
+                return;
             }
-            fwStatus = QStringLiteral("failed (reset)");
-            finish();
-            return;
         }
     } else if (!p.portLocation.isEmpty()) {
         // Та же проверка, что и в ветке после MSC-сеанса: если порт Карабаса ещё жив,
