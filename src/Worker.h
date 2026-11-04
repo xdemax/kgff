@@ -23,6 +23,9 @@ struct Params {
     QString portLocation;       // например /dev/ttyACM0; пусто = пропустить сброс
     QString firmwarePath;
     int mscMode = 1;            // режим MSC: 1 -> AT+KARABAS=msc, 2 -> AT+KARABAS=msc2
+    // true - автодетект модели при старте: "нет ответа" не считается ошибкой,
+    // пользователь сам выберет модель или нажмёт лупу.
+    bool autoDetect = false;
 };
 
 // Фоновый исполнитель. Живёт в отдельном QThread, управляется из GUI через

@@ -228,6 +228,12 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
               QString::fromLatin1(APP_GIT_DESCRIBE) + QLatin1Char(')'));
     onRefreshPorts();
     appendLog(QStringLiteral("Application is ready."));
+    // Автодетект модели при старте: если найден ровно один USB-порт, сразу
+    // пробуем AT+KARABAS=version в фоне. Если ответа нет - пользователь выберет
+    // модель сам или нажмёт лупу. Не блокирует GUI и не включает setBusy().
+    if (m_comCombo->count() == 2) {     // 0 - "(not selected)", 1 - единственный порт
+        QMetaObject::invokeMethod(this, &MainWindow::onAutoDetectModel, Qt::QueuedConnection);
+    }
 }
 
 MainWindow::~MainWindow() {
@@ -397,6 +403,16 @@ void MainWindow::onDetectModel() {
     if (m_busy) return;
     setBusy(true);
     const Params p = collectParams();
+    m_worker->clearCancel();
+    QMetaObject::invokeMethod(m_worker, [w = m_worker, p]() { w->runDetectModel(p); }, Qt::QueuedConnection);
+}
+
+// Автодетект модели при старте: не блокирует GUI (без setBusy), не мешает
+// пользователю. Если ответа нет - просто пишем в лог, что модель не определена.
+void MainWindow::onAutoDetectModel() {
+    if (m_busy) return;
+    Params p = collectParams();
+    p.autoDetect = true;
     m_worker->clearCancel();
     QMetaObject::invokeMethod(m_worker, [w = m_worker, p]() { w->runDetectModel(p); }, Qt::QueuedConnection);
 }

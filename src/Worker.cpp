@@ -436,12 +436,23 @@ void Worker::runMsc(const Params& p) { guarded([&]() { doOpenSd(p); }); }
 void Worker::runDetectModel(const Params& p) {
     guarded([&]() {
         if (p.portLocation.isEmpty()) {
-            emit log(QStringLiteral("Error: Please select an active serial port first."));
+            if (p.autoDetect) {
+                emit log(QStringLiteral("Model was not detected automatically: no serial port selected. "
+                                        "Choose the model manually or select a port and press the magnifier."));
+            } else {
+                emit log(QStringLiteral("Error: Please select an active serial port first."));
+            }
             return;
         }
         QString raw;
         int board = 0;
-        if (!queryVersion(p.portLocation, &raw, &board)) return;
+        if (!queryVersion(p.portLocation, &raw, &board)) {
+            if (p.autoDetect) {
+                emit log(QStringLiteral("Model was not detected automatically: the board did not answer. "
+                                        "Choose the model manually or press the magnifier."));
+            }
+            return;
+        }
 
         emit log("Device version: " + raw);
         int modelIndex = -1;

@@ -32,6 +32,7 @@ private slots:
     void onFlash();
     void onMsc();
     void onDetectModel();
+    void onAutoDetectModel();
     void onModelDetected(int modelIndex, const QString& raw);
     void appendLog(const QString& message);
     void appendLogVerbose(const QString& message);

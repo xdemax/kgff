@@ -51,6 +51,10 @@
 
 ### Автоопределение модели
 
+При запуске, если найден ровно один USB-порт, программа сразу в фоне отправляет плате команду
+`AT+KARABAS=version` и выставляет модель автоматически. Если порт промолчал (плата не подключена,
+старая прошивка, порт занят), модель можно выбрать вручную или нажать кнопку с лупой.
+
 Кнопка с лупой рядом со списком моделей отправляет плате команду `AT+KARABAS=version` и ждёт ответ
 до двух секунд. Ответ имеет вид `+KARABAS:<firmware>;<board>;<core id>;<core build>`, где `board` —
 идентификатор платы: `1` — Karabas Go, `2` — Karabas Go Mini rev A-F, `3` — Karabas Go Mini rev G.
@@ -198,6 +202,10 @@ Do not disconnect the board or close the window while an operation is in progres
 the program will ask for confirmation and stop at a safe point.
 
 ### Automatic model detection
+
+On startup, if exactly one USB port is found, the program immediately sends the `AT+KARABAS=version`
+command to the board in the background and selects the model automatically. If the port stays silent
+(board not connected, old firmware, port busy), you can pick the model manually or click the magnifier.
 
 The magnifier button next to the model list sends the `AT+KARABAS=version` command to the board and waits
 up to two seconds for a reply. The reply has the form `+KARABAS:<firmware>;<board>;<core id>;<core build>`,
