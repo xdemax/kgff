@@ -82,8 +82,9 @@
 **Обновление ядер.** Программа командой переводит плату в режим кард-ридера, находит появившийся диск SD-карты, создаёт на нём
 папку `backup_ГГГГ-ММ-ДД_ЧЧ-ММ-СС` и переносит в неё старые ядра нужной модели, а затем копирует новые. В резервную папку попадают
 только релизные ядра (те, что входят в набор с GitHub); пользовательские и тестовые ядра, положенные на карту вручную, остаются
-на месте. После этого карта безопасно извлекается из системы, и плата возвращается в обычный режим. Если на каком-то шаге что-то
-идёт не так, изменения откатываются: старые ядра возвращаются на место.
+на месте. Если на карте остались ядра старого формата `.kg1`/`.kg2`/`.kg3` (пользователь давно не обновлял устройство), они тоже
+переносятся в резервную папку. После этого карта безопасно извлекается из системы, и плата возвращается в обычный режим. Если
+на каком-то шаге что-то идёт не так, изменения откатываются: старые ядра возвращаются на место.
 
 **Проверки.** Перед записью программа проверяет, что файл прошивки действительно является образом UF2 (включая family ID RP2040,
 номера блоков и размеры полезной нагрузки во всех блоках), что скачан полный набор ядер и что найден именно диск платы, а не другая
@@ -239,8 +240,10 @@ to it, and the board reboots with the new firmware.
 **Cores update.** The program switches the board into card reader mode, finds the SD card drive that appears, creates a
 `backup_YYYY-MM-DD_HH-MM-SS` folder on it, moves the old cores of the selected model there, and then copies the new ones.
 Only release cores (those that are part of the GitHub set) are moved to the backup folder; custom and test cores placed on
-the card manually are left in place. After that, the card is safely ejected from the system, and the board returns to
-normal mode. If something goes wrong at any step, the changes are rolled back: the old cores are restored.
+the card manually are left in place. If the card still has cores in the old `.kg1`/`.kg2`/`.kg3` format (the user has not
+updated the device for a long time), they are also moved to the backup folder. After that, the card is safely ejected from
+the system, and the board returns to normal mode. If something goes wrong at any step, the changes are rolled back: the
+old cores are restored.
 
 **Checks.** Before writing, the program verifies that the firmware file is really a UF2 image (including the RP2040
 family ID, block numbers and payload sizes in every block), that a complete set of cores has been downloaded, and that

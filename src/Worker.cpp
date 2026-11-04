@@ -1482,7 +1482,11 @@ Worker::MscResult Worker::updateCoresOnSd(const QString& portLocation,
 
     // 1) Бэкап старых ядер. Переносим только те файлы, которые входят в релизный набор
     // (совпадают по имени с newCores); пользовательские/тестовые ядра не трогаем.
-    emit log("Moving existing release cores (" + coresExt() + ") from SD root to backup folder...");
+    // Дополнительно бэкапим старые ядра с расширениями .kg1/.kg2/.kg3: если пользователь
+    // давно не обновлял устройство, на карте могут лежать ядра старого формата, и при
+    // переходе на общий .kg они иначе были бы потеряны.
+    emit log("Moving existing release cores (" + coresExt() + " and legacy .kg1/.kg2/.kg3) "
+             "from SD root to backup folder...");
     // FAT регистронезависима: "ALF.KG3" на карте и "alf.kg3" в релизе - один и тот же файл.
     // Сравниваем имена в нижнем регистре, иначе старый файл не попадёт в бэкап и будет
     // перезаписан без возможности отката.
@@ -1491,6 +1495,13 @@ Worker::MscResult Worker::updateCoresOnSd(const QString& portLocation,
     QStringList oldCores;
     for (const QString& f : listFilesWithExt(root, coresExt())) {
         if (releaseNames.contains(QFileInfo(f).fileName().toLower())) oldCores << f;
+    }
+    // Старые ядра .kg1/.kg2/.kg3: бэкапим все, что есть в корне карты, независимо от имени -
+    // это остатки прежнего формата, и после перехода на .kg они больше не нужны на карте.
+    for (const QString& legacyExt : { QStringLiteral(".kg1"), QStringLiteral(".kg2"), QStringLiteral(".kg3") }) {
+        for (const QString& f : listFilesWithExt(root, legacyExt)) {
+            if (!oldCores.contains(f)) oldCores << f;
+        }
     }
     QList<QPair<QString, QString>> movedOld;
     bool moveFailed = false;
