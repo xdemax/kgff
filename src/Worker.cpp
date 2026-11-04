@@ -767,16 +767,17 @@ QList<Worker::JobResult> Worker::downloadFiles(const QList<DownloadJob>& jobs, i
     return results;
 }
 
-QStringList Worker::fetchCoresList(const ModelInfo& m) {
+QStringList Worker::fetchCoresList() {
     QStringList cores;
+    const QString& ext = coresExt();
     auto add = [&](const QString& name) {
         if (!isSafeFileName(name)) return;                       // защита от "../" и т.п.
-        if (!name.endsWith(m.ext, Qt::CaseInsensitive)) return;
+        if (!name.endsWith(ext, Qt::CaseInsensitive)) return;
         if (!cores.contains(name)) cores << name;
     };
 
     const HttpResult api = httpFetch(
-        QUrl("https://api.github.com/repos/andykarpov/" + m.repo + "/contents/cores"), kMaxTextBytes, nullptr);
+        QUrl("https://api.github.com/repos/andykarpov/" + coresRepo() + "/contents/cores"), kMaxTextBytes, nullptr);
     if (api.ok) {
         QJsonParseError pe;
         const QJsonDocument doc = QJsonDocument::fromJson(api.body, &pe);
@@ -790,17 +791,17 @@ QStringList Worker::fetchCoresList(const ModelInfo& m) {
 
     if (cores.isEmpty() && !m_cancel.load()) {
         const HttpResult html = httpFetch(
-            QUrl("https://github.com/andykarpov/" + m.repo + "/tree/master/cores"), kMaxTextBytes, nullptr);
+            QUrl("https://github.com/andykarpov/" + coresRepo() + "/tree/master/cores"), kMaxTextBytes, nullptr);
         if (html.ok) {
-            // ".kg1" не должно совпадать с началом ".kg10" - отсекаем продолжение имени
+            // ".kg" не должно совпадать с началом ".kg10" - отсекаем продолжение имени
             const QRegularExpression re(
-                "([A-Za-z0-9_\\-.]+" + QRegularExpression::escape(m.ext) + ")(?![A-Za-z0-9_\\-.])",
+                "([A-Za-z0-9_\\-.]+" + QRegularExpression::escape(ext) + ")(?![A-Za-z0-9_\\-.])",
                 QRegularExpression::CaseInsensitiveOption);
             const QString text = QString::fromUtf8(html.body);
             QRegularExpressionMatchIterator it = re.globalMatch(text);
             while (it.hasNext()) add(it.next().captured(1));
         } else if (!m_cancel.load()) {
-            emit log("Error: Failed to connect to GitHub repository '" + m.repo + "' (" + html.error + ").");
+            emit log("Error: Failed to connect to GitHub repository '" + coresRepo() + "' (" + html.error + ").");
         }
     }
     return cores;
@@ -897,7 +898,7 @@ void Worker::doDownload(const Params& p) {
     emit log(QStringLiteral("Fetching actual cores list from GitHub repository..."));
     QElapsedTimer listTimer;
     listTimer.start();
-    const QStringList cores = fetchCoresList(m);
+    const QStringList cores = fetchCoresList();
     emit logVerbose("Cores list request took " + QString::number(listTimer.elapsed() / 1000.0, 'f', 1) + " s.");
     if (m_cancel.load()) {
         emit log(QStringLiteral("Operation cancelled by user."));
@@ -907,7 +908,7 @@ void Worker::doDownload(const Params& p) {
         emit log(QStringLiteral("Warning: Could not parse cores list or directory is empty for target filter."));
         return;
     }
-    emit log("Found " + QString::number(cores.size()) + " core files (" + m.ext + "). Starting download...");
+    emit log("Found " + QString::number(cores.size()) + " core files (" + coresExt() + "). Starting download...");
 
     // Старые ядра в рабочей папке удаляем, чтобы не раскатать устаревшие файлы
     QDir(coresDir).removeRecursively();
@@ -916,7 +917,7 @@ void Worker::doDownload(const Params& p) {
         return;
     }
 
-    const QString baseUrl = "https://raw.githubusercontent.com/andykarpov/" + m.repo + "/master/cores/";
+    const QString baseUrl = "https://raw.githubusercontent.com/andykarpov/" + coresRepo() + "/master/cores/";
     QList<DownloadJob> jobs;
     for (const QString& core : cores) {
         DownloadJob j;
@@ -1420,7 +1421,7 @@ void Worker::rollbackCores(const QStringList& copiedNew, const QList<QPair<QStri
 // Переключение в MSC, бэкап старых ядер, копирование новых, извлечение диска.
 // true - можно продолжать прошивку; false - операция прервана.
 // ----------------------------------------------------------------------------
-Worker::MscResult Worker::updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
+Worker::MscResult Worker::updateCoresOnSd(const QString& portLocation,
                                           const QStringList& newCores, bool updateExtra, bool updateFirmware) {
     MscResult result;
     emit log(QStringLiteral("Cores check active. Switching Karabas to SD Card MSC mode (card 1)..."));
@@ -1481,14 +1482,14 @@ Worker::MscResult Worker::updateCoresOnSd(const ModelInfo& m, const QString& por
 
     // 1) Бэкап старых ядер. Переносим только те файлы, которые входят в релизный набор
     // (совпадают по имени с newCores); пользовательские/тестовые ядра не трогаем.
-    emit log("Moving existing release cores (" + m.ext + ") from SD root to backup folder...");
+    emit log("Moving existing release cores (" + coresExt() + ") from SD root to backup folder...");
     // FAT регистронезависима: "ALF.KG3" на карте и "alf.kg3" в релизе - один и тот же файл.
     // Сравниваем имена в нижнем регистре, иначе старый файл не попадёт в бэкап и будет
     // перезаписан без возможности отката.
     QSet<QString> releaseNames;
     for (const QString& src : newCores) releaseNames.insert(QFileInfo(src).fileName().toLower());
     QStringList oldCores;
-    for (const QString& f : listFilesWithExt(root, m.ext)) {
+    for (const QString& f : listFilesWithExt(root, coresExt())) {
         if (releaseNames.contains(QFileInfo(f).fileName().toLower())) oldCores << f;
     }
     QList<QPair<QString, QString>> movedOld;
@@ -1711,12 +1712,6 @@ void Worker::doFlash(const Params& p) {
     }
 
     if (p.updateCores || p.updateExtra) {
-        if (p.updateCores) {
-            if (p.modelIndex < 0 || p.modelIndex >= models().size()) {
-                emit log(QStringLiteral("Error: Unknown device model selected."));
-                return;
-            }
-        }
         if (p.portLocation.isEmpty()) {
             emit log(QStringLiteral("Error: Updating cores/extra requires a serial port (to send the MSC command)."));
             return;
@@ -1726,16 +1721,15 @@ void Worker::doFlash(const Params& p) {
         const QString extraFilesDir = extraDir + QStringLiteral("/files");
         QStringList newCores;
         if (p.updateCores) {
-            const ModelInfo& m = models().at(p.modelIndex);
             if (!QFile::exists(coresDir + "/" + kCoresCompleteMarker)) {
                 emit log(QStringLiteral("Error: No complete set of downloaded cores found. Check 'Update cores' and "
                                         "press 'Download via GitHub' first."));
                 return;
             }
-            newCores = listFilesWithExt(coresDir, m.ext);
+            newCores = listFilesWithExt(coresDir, coresExt());
             if (newCores.isEmpty()) {
-                emit log("Error: No downloaded core files (" + m.ext +
-                         ") for the selected model. Press 'Download via GitHub' first.");
+                emit log("Error: No downloaded core files (" + coresExt() +
+                         ") found. Press 'Download via GitHub' first.");
                 return;
             }
         }
@@ -1751,8 +1745,7 @@ void Worker::doFlash(const Params& p) {
 
         // Один MSC-сеанс: сначала ядра, затем extra (обе операции на карте №1).
         if (p.updateCores) {
-            const ModelInfo& m = models().at(p.modelIndex);
-            const MscResult r = updateCoresOnSd(m, p.portLocation, newCores, p.updateExtra, p.updateFirmware);
+            const MscResult r = updateCoresOnSd(p.portLocation, newCores, p.updateExtra, p.updateFirmware);
             coresStatus = r.coresOk ? QStringLiteral("done") : QStringLiteral("failed");
             if (p.updateExtra) {
                 if (!r.extraAttempted) {

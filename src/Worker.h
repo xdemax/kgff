@@ -88,7 +88,8 @@ private:
     // Параллельная загрузка нескольких файлов через ОДИН QNetworkAccessManager
     // (общее соединение, до maxParallel файлов одновременно).
     QList<JobResult> downloadFiles(const QList<DownloadJob>& jobs, int maxParallel);
-    QStringList fetchCoresList(const ModelInfo& m);
+    // Единый список ядер из репозитория karabas-go (общий для всех моделей).
+    QStringList fetchCoresList();
 
     void doDownload(const Params& p);
     void doFlash(const Params& p);
@@ -132,7 +133,7 @@ private:
         bool extraDownloaded = false;
         QString abortReason;        // пусто, если сеанс дошёл до конца
     };
-    MscResult updateCoresOnSd(const ModelInfo& m, const QString& portLocation,
+    MscResult updateCoresOnSd(const QString& portLocation,
                               const QStringList& newCores, bool updateExtra, bool updateFirmware);
     // MSC-сеанс «только extra»: переключение в MSC, ожидание диска, копирование, eject.
     // Возвращает тот же MscResult, что и updateCoresOnSd, чтобы doFlash обрабатывал
