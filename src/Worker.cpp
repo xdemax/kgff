@@ -1196,6 +1196,14 @@ bool Worker::resetPortToBootloader(const QString& portLocation) {
             return false;
         }
         if (attempt > 0) {
+            // Если диск RPI-RP2 уже появился, сброс фактически сработал: Windows может
+            // ещё не отпустить COM-порт (ERROR_GEN_FAILURE), но плата уже в BOOTSEL.
+            // Прекращаем попытки, чтобы не ждать 30 секунд впустую.
+            if (!Platform::bootloaderDisks().isEmpty()) {
+                emit log(QStringLiteral("The RPI-RP2 bootloader drive has appeared; the 1200 bps reset "
+                                        "has taken effect."));
+                return true;
+            }
             if (!isPortPresent(portLocation)) {
                 m_portOpenFailed = true;
                 emit log("Port " + portLocation + " is no longer present; stopping the 1200 bps reset retries.");
@@ -1914,11 +1922,12 @@ void Worker::doFlash(const Params& p) {
                 finish();
                 return;
             }
-            if (portGone && !boots.isEmpty()) {
-                // Ровно один диск RPI-RP2 и порт Карабаса исчез - это ожидаемый сценарий
-                // (плата уже в BOOTSEL). Пишем предупреждение и продолжаем без диалога.
-                emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
-                                        "is already available. Writing the firmware to it."));
+            if (!boots.isEmpty()) {
+                // Диск RPI-RP2 уже виден - плата в BOOTSEL, даже если Windows ещё
+                // не отпустил COM-порт (ERROR_GEN_FAILURE после MSC-сеанса).
+                // Сброс фактически сработал, продолжаем прошивку.
+                emit log(QStringLiteral("The RPI-RP2 bootloader drive is already available. "
+                                        "Writing the firmware to it."));
             } else {
                 emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                         "Aborting before flashing."));
@@ -1960,11 +1969,12 @@ void Worker::doFlash(const Params& p) {
                 finish();
                 return;
             }
-            if (portGone && !boots.isEmpty()) {
-                // Ровно один диск RPI-RP2 и порт Карабаса исчез - это ожидаемый сценарий
-                // (плата уже в BOOTSEL). Пишем предупреждение и продолжаем без диалога.
-                emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
-                                        "is already available. Writing the firmware to it."));
+            if (!boots.isEmpty()) {
+                // Диск RPI-RP2 уже виден - плата в BOOTSEL, даже если Windows ещё
+                // не отпустил COM-порт (ERROR_GEN_FAILURE после MSC-сеанса).
+                // Сброс фактически сработал, продолжаем прошивку.
+                emit log(QStringLiteral("The RPI-RP2 bootloader drive is already available. "
+                                        "Writing the firmware to it."));
             } else {
                 emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                         "Aborting before flashing."));
