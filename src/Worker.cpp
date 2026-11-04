@@ -1347,7 +1347,7 @@ bool Worker::waitForMountedVolume(const std::function<QList<Platform::Candidate>
 bool Worker::confirmDrive(const Platform::Candidate& c) {
     if (c.mountPoint.isEmpty()) return false;
 
-    // Признаки Карабаса: ядра .kg1/.kg2/.kg3 в корне или папка backup_*.
+    // Признаки Карабаса: ядра .kg (или старые .kg1/.kg2/.kg3) в корне или папка backup_*.
     if (isKarabasVolume(c.mountPoint)) return true;
 
     // Список файлов и папок в корне (без служебных ._* от macOS).
@@ -1365,7 +1365,7 @@ bool Worker::confirmDrive(const Platform::Candidate& c) {
 
     if (names.isEmpty()) {
         // Чистая карта: писать можно, но предупредим - вдруг это чужая пустая флешка.
-        emit log(QStringLiteral("Warning: The drive %1 [%2] (%3) has no Karabas markers (no .kg* cores "
+        emit log(QStringLiteral("Warning: The drive %1 [%2] (%3) has no Karabas markers (no .kg cores "
                                 "and no backup_* folder). It looks like an empty card; continuing.")
                      .arg(c.node, labelPart, QString::number(bytesTotal / (1024 * 1024)) + QStringLiteral(" MB")));
         return true;

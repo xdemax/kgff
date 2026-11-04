@@ -10,19 +10,21 @@ struct ModelInfo {
 };
 
 inline const QList<ModelInfo>& models() {
+    // Все прошивки и ядра теперь лежат в одном репозитории karabas-go.
+    // Ядра общие для всех моделей и имеют расширение .kg.
     static const QList<ModelInfo> list = {
         { QStringLiteral("Karabas Go"),
           QStringLiteral("karabas-go"),
           QStringLiteral("https://raw.githubusercontent.com/andykarpov/karabas-go/master/firmware/firmware.uf2"),
-          QStringLiteral(".kg1") },
+          QStringLiteral(".kg") },
         { QStringLiteral("Karabas Go Mini rev A-F"),
-          QStringLiteral("karabas-mini"),
-          QStringLiteral("https://raw.githubusercontent.com/andykarpov/karabas-mini/master/firmware/firmware.uf2"),
-          QStringLiteral(".kg2") },
+          QStringLiteral("karabas-go"),
+          QStringLiteral("https://raw.githubusercontent.com/andykarpov/karabas-go/master/firmware/karabas_mini.uf2"),
+          QStringLiteral(".kg") },
         { QStringLiteral("Karabas Go Mini rev G"),
-          QStringLiteral("karabas-mini"),
-          QStringLiteral("https://raw.githubusercontent.com/andykarpov/karabas-mini/master/firmware/firmware_g.uf2"),
-          QStringLiteral(".kg3") },
+          QStringLiteral("karabas-go"),
+          QStringLiteral("https://raw.githubusercontent.com/andykarpov/karabas-go/master/firmware/karabas_minig.uf2"),
+          QStringLiteral(".kg") },
     };
     return list;
 }

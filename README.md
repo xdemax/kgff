@@ -17,7 +17,7 @@
 
 - **Скачивает** актуальные прошивки и ядра из репозиториев автора плат на GitHub.
 - **Обновляет прошивку** платы (микроконтроллер RP2040).
-- **Заменяет ядра** (файлы `.kg1`, `.kg2`, `.kg3`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
+- **Заменяет ядра** (файлы `.kg`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
 - **Открывает SD-карту платы** как обычный диск, чтобы вы могли работать с её файлами напрямую.
 - **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.zip` на SD-карту. Файлы, которые уже есть на карте, заменяются; остальные файлы пользователя не трогаются. Перед копированием проверяется свободное место, а перед распаковкой — распакованный размер архива (лимит 2 ГБ). Симлинки из архива не копируются.
 
@@ -71,7 +71,7 @@
 
 Если плата уже находится в режиме кард-ридера, повторное нажатие **Open SD card >** не отправляет команду ещё раз:
 программа видит смонтированный диск Карабаса и подсказывает, как выйти из режима. Диск определяется по содержимому
-(ядра `.kg1`/`.kg2`/`.kg3` в корне или папка `backup_*`), поэтому случайно вставленная флешка не будет принята за плату.
+(ядра `.kg` в корне или папка `backup_*`), поэтому случайно вставленная флешка не будет принята за плату.
 
 ## Что происходит внутри
 
@@ -89,10 +89,10 @@
 номера блоков и размеры полезной нагрузки во всех блоках), что скачан полный набор ядер и что найден именно диск платы, а не другая
 флешка. Если к компьютеру подключено несколько подходящих дисков, программа остановится и попросит оставить только плату.
 
-Перед записью на SD-карту программа проверяет её содержимое. Если на диске есть ядра `.kg1`/`.kg2`/`.kg3` или папка `backup_*`,
-запись начинается сразу. Пустая карта принимается с предупреждением в журнале. Если на диске есть файлы, но признаков Карабаса нет,
-программа показывает диалог с узлом, меткой, размером и списком файлов и просит подтвердить запись — так чужая флешка не будет
-перезаписана по ошибке.
+Перед записью на SD-карту программа проверяет её содержимое. Если на диске есть ядра `.kg` (или старые `.kg1`/`.kg2`/`.kg3`) или
+папка `backup_*`, запись начинается сразу. Пустая карта принимается с предупреждением в журнале. Если на диске есть файлы, но
+признаков Карабаса нет, программа показывает диалог с узлом, меткой, размером и списком файлов и просит подтвердить запись — так
+чужая флешка не будет перезаписана по ошибке.
 
 Если порт платы ещё жив, а диск `RPI-RP2` уже виден, программа считает, что в режиме загрузчика находится другая RP2040-плата,
 и останавливается с просьбой отключить её. Это защищает от прошивки чужой платы.
@@ -169,7 +169,7 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 - **Downloads** the latest firmware and cores from the board author's GitHub repositories.
 - **Copies extra content** (ROMs, disk images, etc.) from the `extra.zip` archive to the SD card. Files that already exist on the card are replaced; other user files are left untouched. Free space is checked before copying, and the unpacked archive size is checked before extraction (2 GB limit). Symbolic links from the archive are not copied.
 - **Updates the board firmware** (RP2040 microcontroller).
-- **Replaces cores** (`.kg1`, `.kg2`, `.kg3` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
+- **Replaces cores** (`.kg` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
 - **Opens the board's SD card** as a regular drive so you can work with its files directly.
 
 Firmware and cores can be updated together or separately — for example, cores only.
@@ -227,8 +227,8 @@ additional card for other files. Core updates always use card 1, regardless of t
 
 If the board is already in card reader mode, pressing **Open SD card >** again does not send the command a second
 time: the program sees the mounted Karabas drive and tells you how to leave the mode. The drive is identified by
-its contents (`.kg1`/`.kg2`/`.kg3` cores in the root or a `backup_*` folder), so a flash drive inserted by accident
-is not mistaken for the board.
+its contents (`.kg` cores in the root or a `backup_*` folder), so a flash drive inserted by accident is not
+mistaken for the board.
 
 ### What happens under the hood
 
@@ -247,10 +247,10 @@ family ID, block numbers and payload sizes in every block), that a complete set 
 the drive found is the board's drive and not another flash drive. If several suitable drives are connected to the
 computer, the program stops and asks you to leave only the board.
 
-Before writing to the SD card, the program inspects its contents. If the drive contains `.kg1`/`.kg2`/`.kg3` cores or a
-`backup_*` folder, writing starts immediately. An empty card is accepted with a warning in the log. If the drive has
-files but no Karabas markers, the program shows a dialog with the node, label, size and a list of files and asks you to
-confirm — so a foreign flash drive is not overwritten by mistake.
+Before writing to the SD card, the program inspects its contents. If the drive contains `.kg` cores (or the older
+`.kg1`/`.kg2`/`.kg3`) or a `backup_*` folder, writing starts immediately. An empty card is accepted with a warning in
+the log. If the drive has files but no Karabas markers, the program shows a dialog with the node, label, size and a
+list of files and asks you to confirm — so a foreign flash drive is not overwritten by mistake.
 
 If the board's port is still alive while the `RPI-RP2` drive is already visible, the program assumes another RP2040
 board is in bootloader mode and stops, asking you to disconnect it. This prevents flashing a foreign board.

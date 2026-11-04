@@ -90,12 +90,15 @@ bool isKarabasVolume(const QString& mountPoint) {
     const QDir dir(mountPoint);
     if (!dir.exists()) return false;
 
-    // Ядра в корне карты: .kg1 / .kg2 / .kg3
+    // Ядра в корне карты: .kg (новый общий формат) и .kg1/.kg2/.kg3 (старые карты,
+    // прошитые до перехода на общий формат). Старые расширения оставлены для
+    // совместимости: карта с ними всё ещё считается картой Карабаса.
     const QFileInfoList files = dir.entryInfoList(QDir::Files | QDir::NoSymLinks, QDir::Name);
     for (const QFileInfo& fi : files) {
         const QString n = fi.fileName();
         if (n.startsWith(QLatin1String("._"))) continue;      // служебные файлы macOS
-        if (n.endsWith(QLatin1String(".kg1"), Qt::CaseInsensitive) ||
+        if (n.endsWith(QLatin1String(".kg"), Qt::CaseInsensitive) ||
+            n.endsWith(QLatin1String(".kg1"), Qt::CaseInsensitive) ||
             n.endsWith(QLatin1String(".kg2"), Qt::CaseInsensitive) ||
             n.endsWith(QLatin1String(".kg3"), Qt::CaseInsensitive)) {
             return true;

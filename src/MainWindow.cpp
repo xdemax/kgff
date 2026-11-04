@@ -508,7 +508,7 @@ void MainWindow::onConfirmUnrecognizedDrive(const QString& node, const QString& 
     const auto r = QMessageBox::warning(
         this, QStringLiteral("Karabas Flasher"),
         tr("The drive %1 [%2] (%3) does not look like the Karabas SD card:\n"
-           "no .kg1/.kg2/.kg3 cores and no backup_* folder were found.\n\n"
+           "no .kg cores and no backup_* folder were found.\n\n"
            "Files in the root: %4\n\n"
            "Writing to this drive will replace files on it. Continue?")
             .arg(node, label, sizeText, filesText),
