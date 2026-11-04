@@ -24,7 +24,7 @@ inline const QList<ModelInfo>& models() {
     // Ядра общие для всех моделей и имеют расширение .kg.
     static const QList<ModelInfo> list = {
         { QStringLiteral("Karabas Go"),
-          QStringLiteral("https://raw.githubusercontent.com/andykarpov/karabas-go/master/firmware/firmware.uf2") },
+          QStringLiteral("https://raw.githubusercontent.com/andykarpov/karabas-go/master/firmware/karabas_go.uf2") },
         { QStringLiteral("Karabas Go Mini rev A-F"),
           QStringLiteral("https://raw.githubusercontent.com/andykarpov/karabas-go/master/firmware/karabas_mini.uf2") },
         { QStringLiteral("Karabas Go Mini rev G"),
