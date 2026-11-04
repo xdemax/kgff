@@ -57,13 +57,6 @@ signals:
     // false (безопасное поведение - отказ).
     void confirmUnrecognizedDrive(const QString& node, const QString& label, qint64 bytesTotal,
                                   const QStringList& sampleFiles, bool* accepted);
-    // Запрос подтверждения записи на диск RPI-RP2, когда порт Карабаса уже исчез, но
-    // 1200-бод-сброс не выполнялся (имя порта могло измениться после MSC-сеанса).
-    // Рядом может оказаться чужая RP2040-плата в BOOTSEL. Отправляется через
-    // Qt::BlockingQueuedConnection; при отсутствии соединения accepted остаётся false.
-    void confirmBootloaderDrive(const QString& node, const QString& label, qint64 bytesTotal,
-                                bool* accepted);
-
 private:
     struct HttpResult {
         bool ok = false;
@@ -115,9 +108,6 @@ private:
     // значит, этот диск принадлежит ДРУГОЙ RP2040-плате (у живого Карабаса в нормальном
     // режиме RPI-RP2 быть не может). Прошивка ушла бы на чужую плату.
     bool foreignBootloaderPresent(const QString& portLocation);
-    // Спросить у пользователя подтверждение записи на найденный диск RPI-RP2
-    // (через сигнал confirmBootloaderDrive). Возвращает true, если пользователь согласился.
-    bool askConfirmBootloaderDrive(const Platform::Candidate& boot);
 
     bool waitForMountedVolume(const std::function<QList<Platform::Candidate>()>& finder,
                               int timeoutMs, Platform::Candidate* out);

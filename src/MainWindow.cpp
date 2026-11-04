@@ -197,8 +197,6 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     // BlockingQueuedConnection: рабочий поток ждёт ответа пользователя, GUI показывает диалог.
     connect(m_worker, &Worker::confirmUnrecognizedDrive, this, &MainWindow::onConfirmUnrecognizedDrive,
             Qt::BlockingQueuedConnection);
-    connect(m_worker, &Worker::confirmBootloaderDrive, this, &MainWindow::onConfirmBootloaderDrive,
-            Qt::BlockingQueuedConnection);
     m_thread->start();
 
     connect(m_downloadBtn, &QPushButton::clicked, this, &MainWindow::onDownload);
@@ -501,25 +499,6 @@ void MainWindow::onConfirmUnrecognizedDrive(const QString& node, const QString& 
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (accepted) *accepted = (r == QMessageBox::Yes);
     appendLog(QStringLiteral("User %1 writing to unrecognized drive %2.")
-                  .arg(r == QMessageBox::Yes ? QStringLiteral("confirmed") : QStringLiteral("declined"), node));
-}
-
-void MainWindow::onConfirmBootloaderDrive(const QString& node, const QString& label, qint64 bytesTotal,
-                                          bool* accepted) {
-    if (accepted) *accepted = false;        // безопасное поведение по умолчанию
-
-    const QString sizeText = QString::number(bytesTotal / (1024 * 1024)) + QStringLiteral(" MB");
-    const auto r = QMessageBox::warning(
-        this, QStringLiteral("Karabas Flasher"),
-        tr("The serial port of the board has disappeared, but the RPI-RP2 bootloader drive %1 [%2] (%3) "
-           "is already present.\n\n"
-           "The 1200 bps reset was not performed, so this drive may belong to another RP2040 board "
-           "connected to the computer.\n\n"
-           "Write the firmware to this drive?")
-            .arg(node, label, sizeText),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (accepted) *accepted = (r == QMessageBox::Yes);
-    appendLog(QStringLiteral("User %1 writing to RPI-RP2 drive %2.")
                   .arg(r == QMessageBox::Yes ? QStringLiteral("confirmed") : QStringLiteral("declined"), node));
 }
 

@@ -95,7 +95,8 @@
 
 **Ошибки порта.** Если порт не открылся или запись в него не удалась (нет прав, порт занят другой программой), программа
 сообщает об этом сразу и не ждёт появления диска. Если порт реально исчез (например, отключили кабель) и диск `RPI-RP2`
-уже виден, прошивка продолжается без 1200-бод-сброса — но только в ветке без MSC-сеанса, где имя порта не могло измениться.
+уже виден, прошивка продолжается без 1200-бод-сброса: это ожидаемый сценарий, когда плата уже в режиме загрузчика.
+Если дисков `RPI-RP2` несколько, программа останавливается и просит отключить лишние RP2040-платы.
 
 ## Установка
 
@@ -248,8 +249,9 @@ board is in bootloader mode and stops, asking you to disconnect it. This prevent
 
 **Port errors.** If the port could not be opened or written to (no permission, port busy), the program reports it
 immediately and does not wait for a drive to appear. If the port has really disappeared (e.g. the cable was unplugged)
-and the `RPI-RP2` drive is already visible, flashing continues without the 1200 bps reset — but only in the branch
-without an MSC session, where the port name could not have changed.
+and the `RPI-RP2` drive is already visible, flashing continues without the 1200 bps reset: this is the expected
+scenario when the board is already in bootloader mode. If several `RPI-RP2` drives are present, the program stops
+and asks you to disconnect the extra RP2040 boards.
 
 ### Installation
 

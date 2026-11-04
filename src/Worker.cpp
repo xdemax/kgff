@@ -987,20 +987,6 @@ bool Worker::foreignBootloaderPresent(const QString& portLocation) {
     return portOpens(portLocation);
 }
 
-// Подтверждение записи на RPI-RP2, когда 1200-бод-сброс не выполнялся (порт исчез,
-// имя могло измениться после MSC-сеанса). Рядом может быть чужая RP2040-плата.
-bool Worker::askConfirmBootloaderDrive(const Platform::Candidate& boot) {
-    bool accepted = false;
-    const QString labelPart = boot.label.isEmpty() ? QStringLiteral("(no label)") : boot.label;
-    const qint64 bytesTotal = QStorageInfo(boot.mountPoint).bytesTotal();
-    emit confirmBootloaderDrive(boot.node, labelPart, bytesTotal, &accepted);
-    if (!accepted) {
-        emit log(QStringLiteral("Error: Writing to the RPI-RP2 drive %1 [%2] was not confirmed. "
-                                "Nothing was written to it.").arg(boot.node, labelPart));
-    }
-    return accepted;
-}
-
 bool Worker::isPortPresent(const QString& portLocation) {
     const QList<QSerialPortInfo> ports = QSerialPortInfo::availablePorts();
     for (const QSerialPortInfo& i : ports) {
@@ -1929,13 +1915,10 @@ void Worker::doFlash(const Params& p) {
                 return;
             }
             if (portGone && !boots.isEmpty()) {
+                // Ровно один диск RPI-RP2 и порт Карабаса исчез - это ожидаемый сценарий
+                // (плата уже в BOOTSEL). Пишем предупреждение и продолжаем без диалога.
                 emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
-                                        "is already available. Asking for confirmation before writing."));
-                if (!askConfirmBootloaderDrive(boots.first())) {
-                    fwStatus = QStringLiteral("failed (RPI-RP2 not confirmed)");
-                    finish();
-                    return;
-                }
+                                        "is already available. Writing the firmware to it."));
             } else {
                 emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                         "Aborting before flashing."));
@@ -1978,13 +1961,10 @@ void Worker::doFlash(const Params& p) {
                 return;
             }
             if (portGone && !boots.isEmpty()) {
+                // Ровно один диск RPI-RP2 и порт Карабаса исчез - это ожидаемый сценарий
+                // (плата уже в BOOTSEL). Пишем предупреждение и продолжаем без диалога.
                 emit log(QStringLiteral("The serial port is no longer present, but the RPI-RP2 bootloader drive "
-                                        "is already available. Asking for confirmation before writing."));
-                if (!askConfirmBootloaderDrive(boots.first())) {
-                    fwStatus = QStringLiteral("failed (RPI-RP2 not confirmed)");
-                    finish();
-                    return;
-                }
+                                        "is already available. Writing the firmware to it."));
             } else {
                 emit log(QStringLiteral("Error: Could not open the serial port for the 1200 bps reset. "
                                         "Aborting before flashing."));
