@@ -15,7 +15,7 @@
 
 ## Что умеет программа
 
-- **Скачивает** актуальные прошивки и ядра из репозиториев автора плат на GitHub.
+- **Скачивает** актуальные прошивки и ядра из репозитория автора плат на GitHub (`karabas-go`).
 - **Обновляет прошивку** платы (микроконтроллер RP2040).
 - **Заменяет ядра** (файлы `.kg`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
 - **Открывает SD-карту платы** как обычный диск, чтобы вы могли работать с её файлами напрямую.
@@ -167,7 +167,7 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 
 ### What the program does
 
-- **Downloads** the latest firmware and cores from the board author's GitHub repositories.
+- **Downloads** the latest firmware and cores from the board author's GitHub repository (`karabas-go`).
 - **Copies extra content** (ROMs, disk images, etc.) from the `extra.zip` archive to the SD card. Files that already exist on the card are replaced; other user files are left untouched. Free space is checked before copying, and the unpacked archive size is checked before extraction (2 GB limit). Symbolic links from the archive are not copied.
 - **Updates the board firmware** (RP2040 microcontroller).
 - **Replaces cores** (`.kg` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
