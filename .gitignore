@@ -3,3 +3,4 @@ build.log
 .cache/
 *.user
 .aider*
+src.zip
