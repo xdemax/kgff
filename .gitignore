@@ -4,3 +4,4 @@ build.log
 *.user
 .aider*
 src.zip
+win-build/
