@@ -1,5 +1,6 @@
 #include "Worker.h"
 
+#include "CoreFile.h"
 #include "Uf2.h"
 #include "Util.h"
 
@@ -27,6 +28,7 @@
 #include <QSerialPortInfo>
 #include <QThread>
 #include <QTimer>
+#include <QVariantMap>
 
 #include <algorithm>
 #include <exception>
@@ -455,6 +457,11 @@ void Worker::runDetectModel(const Params& p) {
         }
 
         emit log("Device version: " + raw);
+
+        // Сразу за version — список ядер на карте. Ошибка list не отменяет
+        // определение модели: старая прошивка может не знать эту команду.
+        queryCoreList(p.portLocation, board, nullptr);
+
         int modelIndex = -1;
         switch (board) {
         case 1: modelIndex = 0; break;      // Karabas Go
@@ -949,6 +956,120 @@ void Worker::doDownload(const Params& p) {
              QString::number(cores.size()) + " (" + QString::number(totalBytes / 1024) + " KB in " +
              QString::number(secs, 'f', 1) + " s, " + QString::number(speedKb) + " KB/s)");
 
+    // Версия ядра лежит в секции CORE формата kgo2. В одном .kg три сборки для трёх
+    // плат, поэтому читаем секцию выбранной модели: AT+KARABAS=list на плате вернёт
+    // build именно для её board id.
+    QList<CoreFileInfo> parsedCores;
+    QStringList notForBoardCores;
+    QList<QPair<QString, QString>> parseErrors;
+    const int board = p.modelIndex + 1;     // 1 Go, 2 Mini, 3 Mini G
+    for (int i = 0; i < results.size(); ++i) {
+        if (!results.at(i).ok) continue;
+        CoreFileInfo ci;
+        QString why;
+        const CoreParseResult result = parseCoreFile(coresDir + "/" + cores.at(i), board, &ci, &why);
+        if (result == CoreParseResult::NotForBoard) {   // например, pong.kg для Mini
+            notForBoardCores << cores.at(i);
+            continue;
+        }
+        if (result == CoreParseResult::Error) {
+            parseErrors.append(qMakePair(cores.at(i), why));
+            continue;
+        }
+        parsedCores << ci;
+        emit logVerbose(QStringLiteral("Core %1: %2 [%3], build %4.")
+                            .arg(ci.fileName, ci.name, ci.id, ci.build));
+    }
+    const int applicable = parsedCores.size() + parseErrors.size();
+    const QString notForBoardNote = notForBoardCores.isEmpty()
+        ? QString()
+        : QStringLiteral(", %1 not for this board").arg(notForBoardCores.size());
+    emit log(QStringLiteral("Core headers parsed: %1/%2 (kgo2, %3)%4.")
+                 .arg(parsedCores.size()).arg(applicable).arg(m.name, notForBoardNote));
+    if (!parsedCores.isEmpty()) {
+        QStringList lines;
+        lines << QStringLiteral("Core builds (%1):").arg(m.name);
+        for (const CoreFileInfo& ci : parsedCores) {
+            lines << QStringLiteral("  %1: %2 [%3], build %4")
+                         .arg(ci.fileName, ci.name, ci.id, ci.build);
+        }
+        emit logVerbose(lines.join(QLatin1Char('\n')));
+    }
+    if (!parseErrors.isEmpty()) {
+        QStringList details;
+        for (const auto& e : parseErrors) details << e.first + ": " + e.second;
+        emit log(QStringLiteral("Warning: Could not parse %1 core header(s): %2")
+                     .arg(parseErrors.size())
+                     .arg(details.join(QStringLiteral("; "))));
+    }
+
+    // Сравнение с картой: используем последний список от платы, а если его нет
+    // (модель выбрана вручную, плату подключили позже) — запрашиваем list сейчас.
+    const bool listFromSameBoard = m_deviceCoresValid && m_deviceCoresBoard == board;
+    if (!listFromSameBoard && !p.portLocation.isEmpty()) {
+        queryCoreList(p.portLocation, board, nullptr);
+    }
+    const bool installedKnown = m_deviceCoresValid && m_deviceCoresBoard == board;
+
+    QHash<QString, QString> installedByFile;
+    QHash<QString, QString> installedById;
+    if (installedKnown) {
+        for (const CoreFileInfo& ci : m_deviceCores) {
+            installedByFile.insert(ci.fileName.toLower(), ci.build);
+            installedById.insert(ci.id.toLower(), ci.build);
+        }
+    }
+
+    QVariantList rows;
+    for (const CoreFileInfo& ci : parsedCores) {
+        QVariantMap row;
+        row.insert(QStringLiteral("file"), ci.fileName);
+        row.insert(QStringLiteral("downloaded"), ci.build);
+
+        QString state;
+        if (!installedKnown) {
+            row.insert(QStringLiteral("installed"), QStringLiteral("unknown"));
+            state = QStringLiteral("unknown");
+        } else {
+            auto it = installedByFile.constFind(ci.fileName.toLower());
+            if (it == installedByFile.constEnd()) {
+                it = installedById.constFind(ci.id.toLower());
+            }
+            if (it == installedByFile.constEnd()) {
+                row.insert(QStringLiteral("installed"), QStringLiteral("not installed"));
+                state = QStringLiteral("newer");
+            } else {
+                const QString installedBuild = it.value();
+                row.insert(QStringLiteral("installed"), installedBuild);
+                const int cmp = compareCoreBuilds(installedBuild, ci.build);
+                state = cmp < 0 ? QStringLiteral("newer")
+                                : (cmp == 0 ? QStringLiteral("same") : QStringLiteral("older"));
+            }
+        }
+        row.insert(QStringLiteral("state"), state);
+        rows.append(row);
+    }
+    for (const QString& file : notForBoardCores) {
+        QVariantMap row;
+        row.insert(QStringLiteral("file"), file);
+        row.insert(QStringLiteral("state"), QStringLiteral("notSupported"));
+        rows.append(row);
+    }
+    for (const auto& e : parseErrors) {
+        QVariantMap row;
+        row.insert(QStringLiteral("file"), e.first);
+        row.insert(QStringLiteral("detail"), e.second);
+        row.insert(QStringLiteral("state"), QStringLiteral("parseError"));
+        rows.append(row);
+    }
+    std::sort(rows.begin(), rows.end(), [](const QVariant& a, const QVariant& b) {
+        return a.toMap().value(QStringLiteral("file")).toString().toLower() <
+               b.toMap().value(QStringLiteral("file")).toString().toLower();
+    });
+    if (!rows.isEmpty()) {
+        emit coreVersionsReady(rows, m.name, installedKnown);
+    }
+
     if (okCount == cores.size()) {
         // Маркер полноты набора: прошивка с обновлением ядер без него не запустится
         QFile marker(coresDir + "/" + kCoresCompleteMarker);
@@ -1015,7 +1136,7 @@ bool Worker::isPortPresent(const QString& portLocation) {
 // RP2040 (TinyUSB CDC) передаёт данные только при поднятом DTR. clear() не вызывается -
 // на Windows он сбивает USB-CDC устройство.
 bool Worker::sendAtCommand(const QString& portLocation, const QByteArray& cmd,
-                           QByteArray* resp, int timeoutMs) {
+                           QByteArray* resp, int timeoutMs, bool waitForOk) {
     if (resp) resp->clear();
 
     QSerialPort sp;
@@ -1077,6 +1198,11 @@ bool Worker::sendAtCommand(const QString& portLocation, const QByteArray& cmd,
         // Успех (+KARABAS:) проверяем РАНЬШЕ ошибки: отладочная строка прошивки
         // со словом "error" не должна ломать разбор version.
         const AtReply reply = parseAtLines(buf);
+        if (waitForOk) {
+            // list: сначала идёт много строк +KARABAS:, ответ заканчивается OK или ERROR.
+            if (reply.hasOk || reply.hasError) break;
+            continue;
+        }
         if (reply.hasKarabas) {
             // Дочитываем остаток строки, но не дольше 500 мс и с проверкой отмены:
             // поток отладки от устройства не должен зациклить чтение.
@@ -1184,6 +1310,57 @@ bool Worker::queryVersion(const QString& portLocation, QString* raw, int* board)
     }
     if (raw) *raw = m.captured(0).trimmed();
     if (board) *board = m.captured(2).toInt();
+    return true;
+}
+
+// Список ядер на SD-карте: +KARABAS:<file>;<id>;<name>;<build> на ядро, затем OK.
+// Вызывается сразу после version — и при старте, и по кнопке с лупой.
+bool Worker::queryCoreList(const QString& portLocation, int board, QList<CoreFileInfo>* out) {
+    if (out) out->clear();
+    m_deviceCoresValid = false;     // старый список не должен пережить неудачный запрос
+    m_permissionDenied = false;
+    m_portOpenFailed = false;
+    m_portDeviceNotFound = false;
+
+    emit logVerbose("Sending AT+KARABAS=list command to " + portLocation + "...");
+    QByteArray resp;
+    if (!sendAtCommand(portLocation, QByteArray("AT+KARABAS=list\r\n"), &resp, 5000, true)) {
+        if (m_cancel.load()) return false;
+        if (m_portOpenFailed) {
+            emit log(QStringLiteral("Error: The core list command could not be sent (port open/write failed)."));
+        } else {
+            emit log(QStringLiteral("Error: No response from the device to AT+KARABAS=list."));
+        }
+        return false;
+    }
+
+    QString err;
+    const QList<CoreFileInfo> cores = parseCoreListResponse(resp, board, &err);
+    if (!err.isEmpty()) {
+        emit log(QStringLiteral("Warning: The device core list is not usable: ") + err +
+                 ". The firmware may not support AT+KARABAS=list.");
+        return false;
+    }
+    if (out) *out = cores;
+    m_deviceCores = cores;
+    m_deviceCoresBoard = board;
+    m_deviceCoresValid = true;
+
+    QString boardName = QString::number(board);
+    if (board >= 1 && board <= models().size()) boardName = models().at(board - 1).name;
+    emit logVerbose(QStringLiteral("Device core list: %1 core(s) (%2).").arg(cores.size()).arg(boardName));
+    if (cores.isEmpty()) {
+        emit log(QStringLiteral("The device reports no cores on the SD card."));
+        return true;
+    }
+
+    QStringList lines;
+    lines << QStringLiteral("Cores on the device (%1):").arg(boardName);
+    for (const CoreFileInfo& ci : cores) {
+        lines << QStringLiteral("  %1: %2 [%3], build %4")
+                     .arg(ci.fileName, ci.name, ci.id, ci.build);
+    }
+    emit logVerbose(lines.join(QLatin1Char('\n')));
     return true;
 }
 
@@ -1742,6 +1919,28 @@ void Worker::doFlash(const Params& p) {
                 emit log("Error: No downloaded core files (" + coresExt() +
                          ") found. Press 'Download via GitHub' first.");
                 return;
+            }
+            // Копируем только отмеченные в окне сравнения ядра. Пустой набор при
+            // установленном флаге — это осознанный выбор пользователя, а не "все".
+            if (p.coreSelectionSet) {
+                QSet<QString> selected;
+                for (const QString& name : p.selectedCoreFiles) {
+                    selected.insert(QFileInfo(name).fileName().toLower());
+                }
+                QStringList filtered;
+                for (const QString& path : newCores) {
+                    if (selected.contains(QFileInfo(path).fileName().toLower())) filtered << path;
+                }
+                if (filtered.isEmpty()) {
+                    emit log(QStringLiteral("Error: No cores are selected for update. Check at least one core in "
+                                            "the versions window or uncheck 'Update cores'."));
+                    return;
+                }
+                if (filtered.size() != newCores.size()) {
+                    emit logVerbose(QStringLiteral("Core selection: %1 of %2 downloaded cores will be copied.")
+                                        .arg(filtered.size()).arg(newCores.size()));
+                }
+                newCores = filtered;
             }
         }
         if (p.updateExtra) {

@@ -18,6 +18,8 @@
 - **Скачивает** актуальные прошивки и ядра из репозитория автора плат на GitHub (`karabas-go`).
 - **Обновляет прошивку** платы (микроконтроллер RP2040).
 - **Заменяет ядра** (файлы `.kg`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
+- **Читает версии ядер** из заголовков `.kg` (kgo2) для выбранной модели платы и использует их для сравнения; подробный список пишется в файловый журнал при `--log`.
+- **Сравнивает версии с картой** и открывает окно `установленная > загруженная`: зелёным — загруженная версия новее, жёлтым — установленная новее, красным — ядро не поддерживается этой платой или его заголовок не читается. Зелёные ядра отмечены по умолчанию; выбор можно изменить вручную или чекбоксом **All selected** (все / ни одного / только новые).
 - **Открывает SD-карту платы** как обычный диск, чтобы вы могли работать с её файлами напрямую.
 - **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.zip` на SD-карту. Файлы, которые уже есть на карте, заменяются; остальные файлы пользователя не трогаются. Перед копированием проверяется свободное место, а перед распаковкой — распакованный размер архива (лимит 2 ГБ). Симлинки из архива не копируются.
 
@@ -41,7 +43,10 @@
 
    Можно отметить любые галки в любом сочетании.
 4. Нажмите **Download via GitHub**. Программа скачает всё отмеченное. Ядер много, и скорость зависит от вашего интернета;
-   ход загрузки виден в журнале внизу окна.
+   ход загрузки виден в журнале внизу окна. После загрузки ядер программа читает их версии из заголовков `.kg`
+   и открывает окно сравнения с версиями на карте: `установленная > загруженная`. Зелёные ядра отмечены
+   по умолчанию; точки можно поставить или снять вручную, а чекбокс **All selected** переключает
+   все / ни одного / только новые. На карту копируются только отмеченные ядра.
 5. В списке **Serial port** выберите порт платы. В списке показываются только USB-устройства; нужный порт появляется,
    когда плата подключена (если его нет, нажмите **Refresh ports**). Пункт «(not selected - flash without reset)» нужен,
    только если плата уже переведена в режим загрузчика вручную.
@@ -52,13 +57,19 @@
 ### Автоопределение модели
 
 При запуске, если найден ровно один USB-порт, программа сразу в фоне отправляет плате команду
-`AT+KARABAS=version` и выставляет модель автоматически. Если порт промолчал (плата не подключена,
-старая прошивка, порт занят), модель можно выбрать вручную или нажать кнопку с лупой.
+`AT+KARABAS=version` и выставляет модель автоматически. Сразу после ответа на неё отправляется
+`AT+KARABAS=list`: программа получает список ядер на SD-карте и использует его для сравнения версий.
+Подробный список пишется только в файловый журнал при запуске с `--log`; на экран он не выводится.
+Если `list` не поддерживается, определение модели всё равно продолжается. Если порт промолчал
+(плата не подключена, старая прошивка, порт занят), модель можно выбрать вручную или нажать кнопку
+с лупой.
 
 Кнопка с лупой рядом со списком моделей отправляет плате команду `AT+KARABAS=version` и ждёт ответ
-до двух секунд. Ответ имеет вид `+KARABAS:<firmware>;<board>;<core id>;<core build>`, где `board` —
-идентификатор платы: `1` — Karabas Go, `2` — Karabas Go Mini rev A-F, `3` — Karabas Go Mini rev G.
-Полученный ответ выводится в журнал, а в списке моделей автоматически выбирается нужная.
+несколько секунд (с повторами). Ответ имеет вид `+KARABAS:<firmware>;<board>;<core id>;<core build>`,
+где `board` — идентификатор платы: `1` — Karabas Go, `2` — Karabas Go Mini rev A-F,
+`3` — Karabas Go Mini rev G. Затем программа сразу запрашивает `AT+KARABAS=list` и выводит ядра
+с карты в журнал. Полученный ответ `version` выводится в журнал, а в списке моделей автоматически
+выбирается нужная.
 
 ### Работа с SD-картой вручную
 
@@ -171,6 +182,8 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 - **Copies extra content** (ROMs, disk images, etc.) from the `extra.zip` archive to the SD card. Files that already exist on the card are replaced; other user files are left untouched. Free space is checked before copying, and the unpacked archive size is checked before extraction (2 GB limit). Symbolic links from the archive are not copied.
 - **Updates the board firmware** (RP2040 microcontroller).
 - **Replaces cores** (`.kg` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
+- **Reads core versions** from the `.kg` headers (kgo2) for the selected board model and uses them for comparison; the detailed list goes to the file log with `--log`.
+- **Compares versions with the card** and opens a window with `installed > downloaded`: green means the downloaded version is newer, yellow means the installed version is newer, red means the core is not supported by this board or its header cannot be read. Green cores are checked by default; the selection can be changed manually or with the **All selected** checkbox (all / none / only new).
 - **Opens the board's SD card** as a regular drive so you can work with its files directly.
 
 Firmware and cores can be updated together or separately — for example, cores only.
@@ -193,7 +206,10 @@ Firmware and cores can be updated together or separately — for example, cores 
 
    You can check any combination of these.
 4. Click **Download via GitHub**. The program downloads everything that is checked. There are many cores, and the speed
-   depends on your internet connection; progress is shown in the log at the bottom of the window.
+   depends on your internet connection; progress is shown in the log at the bottom of the window. After the cores are
+   downloaded, the program reads their versions from the `.kg` headers and opens a comparison window with the versions
+   on the card: `installed > downloaded`. Green cores are checked by default; change the checkboxes manually or use
+   **All selected** to cycle all / none / only new. Only checked cores are copied to the card.
 5. In the **Serial port** list, select the board's port. Only USB devices are shown; the required port appears
    when the board is connected (if it is missing, click **Refresh ports**). The "(not selected - flash without reset)"
    item is only needed if the board has already been put into bootloader mode manually.
@@ -205,13 +221,17 @@ the program will ask for confirmation and stop at a safe point.
 ### Automatic model detection
 
 On startup, if exactly one USB port is found, the program immediately sends the `AT+KARABAS=version`
-command to the board in the background and selects the model automatically. If the port stays silent
+command to the board in the background and selects the model automatically. Immediately after the reply
+it sends `AT+KARABAS=list`: the program gets the cores on the SD card and uses them for version comparison.
+The detailed list is written only to the file log with `--log`; it is not shown in the on-screen log.
+If `list` is not supported, model detection still continues. If the port stays silent
 (board not connected, old firmware, port busy), you can pick the model manually or click the magnifier.
 
 The magnifier button next to the model list sends the `AT+KARABAS=version` command to the board and waits
-up to two seconds for a reply. The reply has the form `+KARABAS:<firmware>;<board>;<core id>;<core build>`,
+several seconds (with retries) for a reply. The reply has the form `+KARABAS:<firmware>;<board>;<core id>;<core build>`,
 where `board` is the board identifier: `1` — Karabas Go, `2` — Karabas Go Mini rev A-F, `3` — Karabas Go Mini rev G.
-The reply is written to the log, and the matching model is selected in the list automatically.
+The program then immediately requests `AT+KARABAS=list`; the detailed core list goes to the file log with `--log`.
+The `version` reply is written to the log, and the matching model is selected in the list automatically.
 
 On Windows the program raises the DTR/RTS lines explicitly after opening the port: the RP2040 USB-CDC device
 only transmits data when DTR is asserted, as with a terminal. Without this the board does not answer the

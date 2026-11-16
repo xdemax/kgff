@@ -36,6 +36,7 @@ private slots:
     void onModelDetected(int modelIndex, const QString& raw);
     void appendLog(const QString& message);
     void appendLogVerbose(const QString& message);
+    void onCoreVersionsReady(const QVariantList& rows, const QString& boardName, bool installedKnown);
     void onFirmwareReady(const QString& path);
     void onWorkerFinished();
     void onPortAccessDenied(const QString& portLocation);
@@ -78,6 +79,8 @@ private:
 
     QString m_firmwarePath;
     int m_firmwareModelIndex = -1;        // модель, для которой скачана/выбрана прошивка
+    QStringList m_selectedCoreFiles;      // выбор из окна сравнения версий
+    bool m_coreSelectionSet = false;      // true: копировать только выбранные ядра
     bool m_busy = false;
     bool m_closeRequested = false;
     bool m_accessRuleInstalled = false;   // правило udev уже ставилось в этом запуске

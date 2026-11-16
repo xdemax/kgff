@@ -6,10 +6,12 @@
 #include <QString>
 #include <QStringList>
 #include <QUrl>
+#include <QVariantList>
 
 #include <atomic>
 #include <functional>
 
+#include "CoreFile.h"
 #include "Models.h"
 #include "Platform.h"
 
@@ -26,6 +28,10 @@ struct Params {
     // true - автодетект модели при старте: "нет ответа" не считается ошибкой,
     // пользователь сам выберет модель или нажмёт лупу.
     bool autoDetect = false;
+    // Выбор ядер в окне сравнения версий. Если coreSelectionSet=false, копируются
+    // все скачанные ядра (старое поведение); если true — только listed.
+    bool coreSelectionSet = false;
+    QStringList selectedCoreFiles;
 };
 
 // Фоновый исполнитель. Живёт в отдельном QThread, управляется из GUI через
@@ -53,6 +59,9 @@ signals:
     void portAccessDenied(const QString& portLocation); // нет прав на порт (Linux)
     void openFolder(const QString& path);               // открыть папку в файловом менеджере
     void modelDetected(int modelIndex, const QString& raw); // ответ на AT+KARABAS=version
+    // Строки сравнения версий: file, installed, downloaded, state (same/newer/older/
+    // missing/unknown/notSupported/parseError), detail. Показывается после скачивания ядер.
+    void coreVersionsReady(const QVariantList& rows, const QString& boardName, bool installedKnown);
     void portsChanged();                                // список портов мог измениться (MSC, сброс)
     // Запрос подтверждения записи на диск без признаков Карабаса. Отправляется из
     // рабочего потока через Qt::BlockingQueuedConnection: GUI показывает диалог и
@@ -96,12 +105,14 @@ private:
     void doOpenSd(const Params& p);
 
     // Универсальная процедура: открыть порт, отправить AT-команду, дождаться ответа.
-    // Возвращает true, если ответ получен (resp заполнен). Если ответ содержит "ERROR",
-    // возвращает false и заполняет resp текстом ошибки.
+    // Возвращает true, если пришли байты (resp заполнен); строку ERROR разбирает вызывающий.
+    // waitForOk=false: чтение до строки +KARABAS: (version); true — до OK/ERROR (list).
     bool sendAtCommand(const QString& portLocation, const QByteArray& cmd,
-                       QByteArray* resp, int timeoutMs);
+                       QByteArray* resp, int timeoutMs, bool waitForOk = false);
     bool sendMscCommand(const QString& portLocation, int mscMode);
     bool queryVersion(const QString& portLocation, QString* raw, int* board);
+    // Второй запрос после version: список ядер на SD-карте и их версии.
+    bool queryCoreList(const QString& portLocation, int board, QList<CoreFileInfo>* out);
     bool resetPortToBootloader(const QString& portLocation);
     bool isPortPresent(const QString& portLocation);
     // Реальная проба: открыть порт и сразу закрыть, ничего не записывая.
@@ -148,6 +159,12 @@ private:
     bool downloadExtraArchive(const QString& destPath);
     bool extractExtraArchive(const QString& archivePath, const QString& outDir);
     bool copyExtraToSd(const QString& srcDir, const QString& sdRoot);
+
+    // Последний успешный AT+KARABAS=list. Хранится в рабочем потоке и используется
+    // для сравнения с только что скачанными ядрами.
+    QList<CoreFileInfo> m_deviceCores;
+    int m_deviceCoresBoard = 0;
+    bool m_deviceCoresValid = false;
 
     std::atomic<bool> m_cancel{false};
     bool m_permissionDenied = false;                    // только рабочий поток

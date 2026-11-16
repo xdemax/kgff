@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "CoreVersionsDialog.h"
 #include "Models.h"
 #include "Uf2.h"
 #include "Util.h"
@@ -191,6 +192,7 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     connect(m_worker, &Worker::log, this, &MainWindow::appendLog);
     connect(m_worker, &Worker::logVerbose, this, &MainWindow::appendLogVerbose);
     connect(m_worker, &Worker::firmwareReady, this, &MainWindow::onFirmwareReady);
+    connect(m_worker, &Worker::coreVersionsReady, this, &MainWindow::onCoreVersionsReady);
     connect(m_worker, &Worker::finished, this, &MainWindow::onWorkerFinished);
     connect(m_worker, &Worker::portAccessDenied, this, &MainWindow::onPortAccessDenied);
     connect(m_worker, &Worker::openFolder, this, &MainWindow::onOpenFolder);
@@ -218,6 +220,14 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
             m_firmwarePath.clear();
             m_pathEdit->clear();
             m_firmwareModelIndex = -1;
+        }
+        // Выбор ядер зависит от модели: для другой платы часть ядер может быть
+        // недоступна, поэтому старый выбор сбрасываем.
+        if (m_coreSelectionSet) {
+            m_coreSelectionSet = false;
+            m_selectedCoreFiles.clear();
+            appendLog(QStringLiteral("Device model changed; the core selection was reset. Download the cores "
+                                     "again to choose what to update."));
         }
         updateActionState();
     });
@@ -318,6 +328,8 @@ Params MainWindow::collectParams() const {
     p.portLocation = m_comCombo->currentData().toString();
     p.firmwarePath = m_firmwarePath;
     p.mscMode = (m_mscModeGroup->checkedId() == 2) ? 2 : 1;
+    p.coreSelectionSet = m_coreSelectionSet;
+    p.selectedCoreFiles = m_selectedCoreFiles;
     return p;
 }
 
@@ -372,6 +384,11 @@ void MainWindow::updateActionState() {
 // ----------------------------------------------------------------------------
 void MainWindow::onDownload() {
     if (m_busy) return;
+    // Новое скачивание ядер заново выставит выбор в окне сравнения.
+    if (m_coresChk->isChecked()) {
+        m_coreSelectionSet = false;
+        m_selectedCoreFiles.clear();
+    }
     setBusy(true);
     m_downloadBtn->setText(tr("Downloading..."));
     const Params p = collectParams();
@@ -516,6 +533,18 @@ void MainWindow::onConfirmUnrecognizedDrive(const QString& node, const QString& 
     if (accepted) *accepted = (r == QMessageBox::Yes);
     appendLog(QStringLiteral("User %1 writing to unrecognized drive %2.")
                   .arg(r == QMessageBox::Yes ? QStringLiteral("confirmed") : QStringLiteral("declined"), node));
+}
+
+void MainWindow::onCoreVersionsReady(const QVariantList& rows, const QString& boardName,
+                                     bool installedKnown) {
+    CoreVersionsDialog dialog(rows, boardName, installedKnown, this);
+    dialog.exec();
+    // Окно закрывается любым способом — выбор всё равно применяем. По умолчанию
+    // отмечены только зелёные (более новые) ядра.
+    m_selectedCoreFiles = dialog.selectedFiles();
+    m_coreSelectionSet = true;
+    appendLog(QStringLiteral("Cores selected for update: %1.").arg(m_selectedCoreFiles.size()));
+    updateActionState();
 }
 
 void MainWindow::onFirmwareReady(const QString& path) {
