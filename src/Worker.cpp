@@ -40,7 +40,7 @@
 namespace {
 const qint64 kMaxTextBytes = 4 * 1024 * 1024;       // JSON / HTML
 const qint64 kMaxFileBytes = 64 * 1024 * 1024;      // прошивка / ядро
-const qint64 kMaxExtraBytes = 256 * 1024 * 1024;    // extra.7z
+const qint64 kMaxExtraBytes = 256 * 1024 * 1024;    // extra.zip
 const QString kCoresCompleteMarker = QStringLiteral("download_complete.txt");
 const QString kExtraCompleteMarker = QStringLiteral("extra_complete.txt");
 const QString kExtraUrl = QStringLiteral("https://raw.githubusercontent.com/xdemax/kgff/refs/heads/main/extra/extra.zip");
