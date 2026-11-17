@@ -32,6 +32,7 @@ struct Params {
     // все скачанные ядра (старое поведение); если true — только listed.
     bool coreSelectionSet = false;
     QStringList selectedCoreFiles;
+    QStringList ignoredCoreFiles;   // постоянный список игнорируемых ядер
 };
 
 // Фоновый исполнитель. Живёт в отдельном QThread, управляется из GUI через
@@ -144,8 +145,11 @@ private:
         bool extraDownloaded = false;
         QString abortReason;        // пусто, если сеанс дошёл до конца
     };
-    MscResult updateCoresOnSd(const QString& portLocation,
-                              const QStringList& newCores, bool updateExtra, bool updateFirmware);
+    // ignoredCores — имена release-ядер из GitHub, которые пользователь
+    // игнорирует: их старые файлы тоже переносятся в backup, новые не копируются.
+    MscResult updateCoresOnSd(const QString& portLocation, const QStringList& newCores,
+                              bool updateExtra, bool updateFirmware,
+                              const QSet<QString>& ignoredCores);
     // MSC-сеанс «только extra»: переключение в MSC, ожидание диска, копирование, eject.
     // Возвращает тот же MscResult, что и updateCoresOnSd, чтобы doFlash обрабатывал
     // прерывание единообразно.

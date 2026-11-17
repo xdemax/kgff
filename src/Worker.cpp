@@ -1598,8 +1598,9 @@ void Worker::rollbackCores(const QStringList& copiedNew, const QList<QPair<QStri
 // Переключение в MSC, бэкап старых ядер, копирование новых, извлечение диска.
 // true - можно продолжать прошивку; false - операция прервана.
 // ----------------------------------------------------------------------------
-Worker::MscResult Worker::updateCoresOnSd(const QString& portLocation,
-                                          const QStringList& newCores, bool updateExtra, bool updateFirmware) {
+Worker::MscResult Worker::updateCoresOnSd(const QString& portLocation, const QStringList& newCores,
+                                          bool updateExtra, bool updateFirmware,
+                                          const QSet<QString>& ignoredCores) {
     MscResult result;
     emit log(QStringLiteral("Cores check active. Switching Karabas to SD Card MSC mode (card 1)..."));
 
@@ -1662,22 +1663,34 @@ Worker::MscResult Worker::updateCoresOnSd(const QString& portLocation,
     // Дополнительно бэкапим старые ядра с расширениями .kg1/.kg2/.kg3: если пользователь
     // давно не обновлял устройство, на карте могут лежать ядра старого формата, и при
     // переходе на общий .kg они иначе были бы потеряны.
-    emit log("Moving existing release cores (" + coresExt() + " and legacy .kg1/.kg2/.kg3) "
+    emit log("Moving existing release cores (" + coresExt() + " and matching legacy .kg1/.kg2/.kg3) "
              "from SD root to backup folder...");
     // FAT регистронезависима: "ALF.KG3" на карте и "alf.kg3" в релизе - один и тот же файл.
     // Сравниваем имена в нижнем регистре, иначе старый файл не попадёт в бэкап и будет
     // перезаписан без возможности отката.
+    // В набор попадают выбранные для копирования ядра и ignored-ядра: последние нужно
+    // убрать с карты, поэтому их старые версии тоже переносим в backup. Пользовательские
+    // .kg, которых нет в наборе GitHub, не трогаем.
     QSet<QString> releaseNames;
     for (const QString& src : newCores) releaseNames.insert(QFileInfo(src).fileName().toLower());
+    releaseNames.unite(ignoredCores);
+    QSet<QString> releaseStems;
+    for (const QString& name : releaseNames) {
+        const QString stem = QFileInfo(name).completeBaseName().toLower();
+        if (!stem.isEmpty()) releaseStems.insert(stem);
+    }
     QStringList oldCores;
     for (const QString& f : listFilesWithExt(root, coresExt())) {
         if (releaseNames.contains(QFileInfo(f).fileName().toLower())) oldCores << f;
     }
-    // Старые ядра .kg1/.kg2/.kg3: бэкапим все, что есть в корне карты, независимо от имени -
-    // это остатки прежнего формата, и после перехода на .kg они больше не нужны на карте.
+    // Старые .kg1/.kg2/.kg3 переносим только если их основа совпадает с релизным
+    // ядром (alf.kg1 для alf.kg). Пользовательские legacy-ядра не трогаем.
     for (const QString& legacyExt : { QStringLiteral(".kg1"), QStringLiteral(".kg2"), QStringLiteral(".kg3") }) {
         for (const QString& f : listFilesWithExt(root, legacyExt)) {
-            if (!oldCores.contains(f)) oldCores << f;
+            if (releaseStems.contains(QFileInfo(f).completeBaseName().toLower()) &&
+                !oldCores.contains(f)) {
+                oldCores << f;
+            }
         }
     }
     QList<QPair<QString, QString>> movedOld;
@@ -1908,6 +1921,7 @@ void Worker::doFlash(const Params& p) {
         const QString extraDir = workDir() + QStringLiteral("/extra");
         const QString extraFilesDir = extraDir + QStringLiteral("/files");
         QStringList newCores;
+        QSet<QString> ignoredReleaseCores;   // только реально скачанные release-ядра
         if (p.updateCores) {
             if (!QFile::exists(coresDir + "/" + kCoresCompleteMarker)) {
                 emit log(QStringLiteral("Error: No complete set of downloaded cores found. Check 'Update cores' and "
@@ -1919,6 +1933,35 @@ void Worker::doFlash(const Params& p) {
                 emit log("Error: No downloaded core files (" + coresExt() +
                          ") found. Press 'Download via GitHub' first.");
                 return;
+            }
+            // Игнорируемые release-ядра не копируются, а их старые файлы
+            // переносятся в backup. Пользовательские ядра, которых нет в наборе
+            // GitHub, не трогаем: ignoredReleaseCores пересекается с newCores.
+            if (!p.ignoredCoreFiles.isEmpty()) {
+                QSet<QString> downloadedNames;
+                for (const QString& path : newCores) {
+                    downloadedNames.insert(QFileInfo(path).fileName().toLower());
+                }
+                for (const QString& name : p.ignoredCoreFiles) {
+                    const QString key = QFileInfo(name).fileName().toLower();
+                    if (downloadedNames.contains(key)) ignoredReleaseCores.insert(key);
+                }
+                if (!ignoredReleaseCores.isEmpty()) {
+                    QStringList filtered;
+                    for (const QString& path : newCores) {
+                        if (!ignoredReleaseCores.contains(QFileInfo(path).fileName().toLower())) {
+                            filtered << path;
+                        }
+                    }
+                    emit logVerbose(QStringLiteral("Ignored cores: %1 will be moved to backup and not copied.")
+                                        .arg(ignoredReleaseCores.size()));
+                    if (filtered.isEmpty()) {
+                        emit log(QStringLiteral("Error: All downloaded cores are ignored. Unignore at least one "
+                                                "core or uncheck 'Update cores'."));
+                        return;
+                    }
+                    newCores = filtered;
+                }
             }
             // Копируем только отмеченные в окне сравнения ядра. Пустой набор при
             // установленном флаге — это осознанный выбор пользователя, а не "все".
@@ -1955,7 +1998,8 @@ void Worker::doFlash(const Params& p) {
 
         // Один MSC-сеанс: сначала ядра, затем extra (обе операции на карте №1).
         if (p.updateCores) {
-            const MscResult r = updateCoresOnSd(p.portLocation, newCores, p.updateExtra, p.updateFirmware);
+            const MscResult r = updateCoresOnSd(p.portLocation, newCores, p.updateExtra,
+                                                p.updateFirmware, ignoredReleaseCores);
             coresStatus = r.coresOk ? QStringLiteral("done") : QStringLiteral("failed");
             if (p.updateExtra) {
                 if (!r.extraAttempted) {

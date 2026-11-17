@@ -19,7 +19,7 @@
 - **Обновляет прошивку** платы (микроконтроллер RP2040).
 - **Заменяет ядра** (файлы `.kg`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
 - **Читает версии ядер** из заголовков `.kg` (kgo2) для выбранной модели платы и использует их для сравнения; подробный список пишется в файловый журнал при `--log`.
-- **Сравнивает версии с картой** в правой панели главного окна: зелёным — загруженная версия новее, жёлтым — установленная новее, красным — ядро не поддерживается этой платой или его заголовок не читается. Если ядра нет на карте, строка выглядит как `not installed > загруженная версия`. Панель свернута по умолчанию, раскрывается кнопкой **`>>`** и автоматически после парсинга ядер; при раскрытии окно центрируется по итоговой ширине обеих половин. Зелёные ядра отмечены, выбор можно изменить вручную или чекбоксом **All selected** (все / ни одного / только новые). Ядро со статусом `not supported` по умолчанию не отмечено: его точка красная. Если включить — точка станет зелёной, и ядро скопируется на карту; если снять — снова красная.
+- **Сравнивает версии с картой** в правой панели главного окна: зелёным — загруженная версия новее, жёлтым — установленная новее, красным — ядро не поддерживается этой платой или его заголовок не читается. Если ядра нет на карте, строка выглядит как `not installed > загруженная версия`. Панель свернута по умолчанию, раскрывается кнопкой **`>>`** и автоматически после парсинга ядер; при раскрытии окно центрируется по итоговой ширине обеих половин. Зелёные ядра отмечены, выбор можно изменить вручную или чекбоксом **All selected** (все / ни одного / только новые). Точка ядра имеет три состояния: обновить → **ignored** → пропустить. В состоянии `ignored` строка становится тёмно-серой, в колонке `Installed` пишется `ignored`, новая версия не копируется, а старая версия с карты переносится в `backup_*`, чтобы этого ядра на карте не осталось. Пользовательские ядра, которых нет в GitHub, при этом не трогаются. Список игнорируемых сохраняется между запусками. Ядро `not supported` по умолчанию красное; при выборе точка становится зелёной, при игнорировании — тёмно-серой, после снятия — снова красной.
 - **Открывает SD-карту платы** как обычный диск, чтобы вы могли работать с её файлами напрямую.
 - **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.zip` на SD-карту. Файлы, которые уже есть на карте, заменяются; остальные файлы пользователя не трогаются. Перед копированием проверяется свободное место, а перед распаковкой — распакованный размер архива (лимит 2 ГБ). Симлинки из архива не копируются.
 
@@ -92,11 +92,11 @@
 и плата перезагружается уже с новой прошивкой.
 
 **Обновление ядер.** Программа командой переводит плату в режим кард-ридера, находит появившийся диск SD-карты, создаёт на нём
-папку `backup_ГГГГ-ММ-ДД_ЧЧ-ММ-СС` и переносит в неё старые ядра нужной модели, а затем копирует новые. В резервную папку попадают
-только релизные ядра (те, что входят в набор с GitHub); пользовательские и тестовые ядра, положенные на карту вручную, остаются
-на месте. Если на карте остались ядра старого формата `.kg1`/`.kg2`/`.kg3` (пользователь давно не обновлял устройство), они тоже
-переносятся в резервную папку. После этого карта безопасно извлекается из системы, и плата возвращается в обычный режим. Если
-на каком-то шаге что-то идёт не так, изменения откатываются: старые ядра возвращаются на место.
+папку `backup_ГГГГ-ММ-ДД_ЧЧ-ММ-СС` и переносит в неё старые ядра, которые будут заменены или помечены как `ignored`, а затем
+копирует новые. В резервную папку попадают только релизные ядра (те, что входят в набор с GitHub); пользовательские и тестовые
+ядра, положенные на карту вручную, остаются на месте. Старые ядра `.kg1`/`.kg2`/`.kg3` переносятся, только если соответствуют
+релизному ядру (`alf.kg1` для `alf.kg`). После этого карта безопасно извлекается из системы, и плата возвращается в обычный режим.
+Если на каком-то шаге что-то идёт не так, изменения откатываются: старые ядра возвращаются на место.
 
 **Проверки.** Перед записью программа проверяет, что файл прошивки действительно является образом UF2 (включая family ID RP2040,
 номера блоков и размеры полезной нагрузки во всех блоках), что скачан полный набор ядер и что найден именно диск платы, а не другая
@@ -184,7 +184,7 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 - **Updates the board firmware** (RP2040 microcontroller).
 - **Replaces cores** (`.kg` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
 - **Reads core versions** from the `.kg` headers (kgo2) for the selected board model and uses them for comparison; the detailed list goes to the file log with `--log`.
-- **Compares versions with the card** in the right-hand panel of the main window: green means the downloaded version is newer, yellow means the installed version is newer, red means the core is not supported by this board or its header cannot be read. If the core is not on the card, the row shows `not installed > downloaded version`. The panel is collapsed by default, expands with **`>>`** and automatically after core parsing; when expanded, the window is centred using the full width of both halves. Green cores are checked, and the selection can be changed manually or with the **All selected** checkbox (all / none / only new). A core marked `not supported` is unchecked by default and its dot is red. Checking it turns the dot green and copies the core; unchecking turns it red again.
+- **Compares versions with the card** in the right-hand panel of the main window: green means the downloaded version is newer, yellow means the installed version is newer, red means the core is not supported by this board or its header cannot be read. If the core is not on the card, the row shows `not installed > downloaded version`. The panel is collapsed by default, expands with **`>>`** and automatically after core parsing; when expanded, the window is centred using the full width of both halves. Green cores are checked, and the selection can be changed manually or with the **All selected** checkbox (all / none / only new). The core dot has three states: update → **ignored** → skip. An ignored core is dark grey, shows `ignored` in the `Installed` column, the new version is not copied, and the old version on the card is moved to `backup_*` so the core no longer stays on the card. User cores that are not in GitHub are left untouched. The ignore list is kept between runs. A `not supported` core is red by default; selecting turns the dot green, ignoring turns it dark grey, and unchecking turns it red again.
 - **Opens the board's SD card** as a regular drive so you can work with its files directly.
 
 Firmware and cores can be updated together or separately — for example, cores only.
@@ -260,12 +260,11 @@ RP2040 reboots into bootloader mode and appears in the system as an `RPI-RP2` dr
 to it, and the board reboots with the new firmware.
 
 **Cores update.** The program switches the board into card reader mode, finds the SD card drive that appears, creates a
-`backup_YYYY-MM-DD_HH-MM-SS` folder on it, moves the old cores of the selected model there, and then copies the new ones.
-Only release cores (those that are part of the GitHub set) are moved to the backup folder; custom and test cores placed on
-the card manually are left in place. If the card still has cores in the old `.kg1`/`.kg2`/`.kg3` format (the user has not
-updated the device for a long time), they are also moved to the backup folder. After that, the card is safely ejected from
-the system, and the board returns to normal mode. If something goes wrong at any step, the changes are rolled back: the
-old cores are restored.
+`backup_YYYY-MM-DD_HH-MM-SS` folder on it, moves the old cores that will be replaced or marked `ignored` there, and then
+copies the new ones. Only release cores (those that are part of the GitHub set) are moved to the backup folder; custom and
+test cores placed on the card manually are left in place. Old `.kg1`/`.kg2`/`.kg3` cores are moved only when they match a
+release core (`alf.kg1` for `alf.kg`). After that, the card is safely ejected from the system, and the board returns to
+normal mode. If something goes wrong at any step, the changes are rolled back: the old cores are restored.
 
 **Checks.** Before writing, the program verifies that the firmware file is really a UF2 image (including the RP2040
 family ID, block numbers and payload sizes in every block), that a complete set of cores has been downloaded, and that

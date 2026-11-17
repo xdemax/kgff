@@ -14,6 +14,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QStyledItemDelegate>
@@ -48,11 +49,14 @@ public:
         QStyle* style = widget ? widget->style() : QApplication::style();
         style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
 
-        const bool checked = index.data(Qt::CheckStateRole).toInt() == Qt::Checked;
+        const int checkState = index.data(Qt::CheckStateRole).toInt();
+        const bool checked = checkState == Qt::Checked;
+        const bool ignored = checkState == Qt::PartiallyChecked;
         const bool notSupported =
             index.data(Qt::UserRole).toString() == QLatin1String("notSupported");
         QColor color;
-        if (checked) color = QColor(QStringLiteral("#2ea043"));
+        if (ignored) color = QColor(QStringLiteral("#57606a"));
+        else if (checked) color = QColor(QStringLiteral("#2ea043"));
         else if (notSupported) color = QColor(QStringLiteral("#e04040"));
         else color = opt.palette.color(QPalette::Mid);
 
@@ -61,7 +65,7 @@ public:
         QPen pen(color);
         pen.setWidthF(1.5);
         painter->setPen(pen);
-        painter->setBrush(checked ? QBrush(color) : QBrush(Qt::NoBrush));
+        painter->setBrush((checked || ignored) ? QBrush(color) : QBrush(Qt::NoBrush));
         painter->drawEllipse(dotRect(option.rect));
         painter->restore();
     }
@@ -73,20 +77,24 @@ public:
             auto* mouse = static_cast<QMouseEvent*>(event);
             if (!dotRect(option.rect).contains(mouse->position().toPoint())) return false;
             if (event->type() == QEvent::MouseButtonRelease) {
-                const Qt::CheckState state = index.data(Qt::CheckStateRole).toInt() == Qt::Checked
-                    ? Qt::Unchecked
-                    : Qt::Checked;
-                model->setData(index, state, Qt::CheckStateRole);
+                const Qt::CheckState current = static_cast<Qt::CheckState>(
+                    index.data(Qt::CheckStateRole).toInt());
+                const Qt::CheckState next = current == Qt::Checked
+                    ? Qt::PartiallyChecked
+                    : (current == Qt::PartiallyChecked ? Qt::Unchecked : Qt::Checked);
+                model->setData(index, next, Qt::CheckStateRole);
             }
             return true;
         }
         if (event->type() == QEvent::KeyPress) {
             auto* key = static_cast<QKeyEvent*>(event);
             if (key->key() == Qt::Key_Space || key->key() == Qt::Key_Select) {
-                const Qt::CheckState state = index.data(Qt::CheckStateRole).toInt() == Qt::Checked
-                    ? Qt::Unchecked
-                    : Qt::Checked;
-                model->setData(index, state, Qt::CheckStateRole);
+                const Qt::CheckState current = static_cast<Qt::CheckState>(
+                    index.data(Qt::CheckStateRole).toInt());
+                const Qt::CheckState next = current == Qt::Checked
+                    ? Qt::PartiallyChecked
+                    : (current == Qt::PartiallyChecked ? Qt::Unchecked : Qt::Checked);
+                model->setData(index, next, Qt::CheckStateRole);
                 return true;
             }
         }
@@ -157,7 +165,16 @@ CoreVersionsPanel::CoreVersionsPanel(QWidget* parent) : QWidget(parent) {
         applyAllMode(next);
     });
     connect(m_table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* item) {
-        if (item && item->column() == 0) updateAllState();
+        if (m_filling || !item || item->column() != 0) return;
+        const int row = item->row();
+        updateRowAppearance(row);
+        const QTableWidgetItem* core = m_table->item(row, 1);
+        if (!core) return;
+        const QString key = core->text().toLower();
+        if (item->checkState() == Qt::PartiallyChecked) m_ignored.insert(key);
+        else m_ignored.remove(key);
+        saveIgnored();
+        updateAllState();
     });
 
     auto* layout = new QVBoxLayout(this);
@@ -167,22 +184,21 @@ CoreVersionsPanel::CoreVersionsPanel(QWidget* parent) : QWidget(parent) {
     layout->addLayout(top);
     layout->addWidget(m_table, 1);
 
+    loadIgnored();
     clear();
 }
 
 void CoreVersionsPanel::setRows(const QVariantList& rows, const QString& boardName, bool installedKnown) {
+    m_rows = rows;
     m_title->setText(tr("Downloaded cores for %1").arg(boardName));
     m_note->setVisible(!installedKnown);
 
+    m_filling = true;
+    QSignalBlocker blocker(m_table);
     m_table->clearSpans();
     m_table->clearContents();
     const int rowCount = static_cast<int>(rows.size());
     m_table->setRowCount(rowCount);
-    m_all->setEnabled(rowCount > 0);
-
-    const QColor green(QStringLiteral("#2ea043"));
-    const QColor yellow(QStringLiteral("#b58900"));
-    const QColor red(QStringLiteral("#e04040"));
 
     for (int r = 0; r < rowCount; ++r) {
         const QVariantMap row = rows.at(r).toMap();
@@ -192,21 +208,20 @@ void CoreVersionsPanel::setRows(const QVariantList& rows, const QString& boardNa
         const bool parseError = state == QLatin1String("parseError");
         const bool blocked = notSupported || parseError;
         const bool checked = state == QLatin1String("newer");
-        const QColor color = state == QLatin1String("newer")
-            ? green
-            : (state == QLatin1String("older") ? yellow : (blocked ? red : QColor()));
+        const bool ignored = !parseError && m_ignored.contains(file.toLower());
 
         auto* check = new QTableWidgetItem;
-        // notSupported можно включить вручную: по умолчанию ядро не трогаем,
-        // но пользователь может принудительно скопировать его на карту.
         check->setFlags(parseError ? Qt::ItemIsEnabled
                                    : (Qt::ItemIsEnabled | Qt::ItemIsUserCheckable));
         if (notSupported) {
-            check->setToolTip(tr("Not supported by this board. Check to copy it anyway."));
+            check->setToolTip(tr("Not supported by this board. Click: copy -> ignored -> skipped."));
         } else if (parseError) {
             check->setToolTip(tr("Cannot read the header; this core cannot be selected."));
+        } else {
+            check->setToolTip(tr("Click: update -> ignored -> skipped."));
         }
-        check->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
+        check->setCheckState(ignored ? Qt::PartiallyChecked
+                                     : (checked ? Qt::Checked : Qt::Unchecked));
         check->setData(Qt::UserRole, state);
         m_table->setItem(r, 0, check);
 
@@ -216,52 +231,38 @@ void CoreVersionsPanel::setRows(const QVariantList& rows, const QString& boardNa
         m_table->setItem(r, 1, core);
 
         if (blocked) {
-            const QString message = state == QLatin1String("notSupported")
-                ? QStringLiteral("> ") + tr("not supported for your Karabas")
-                : QStringLiteral("> ") + tr("cannot read the downloaded core header: %1")
-                      .arg(row.value(QStringLiteral("detail")).toString());
-            auto* info = new QTableWidgetItem(message);
+            auto* info = new QTableWidgetItem;
             info->setFlags(Qt::ItemIsEnabled);
-            info->setToolTip(message);
             m_table->setItem(r, 2, info);
             m_table->setSpan(r, 2, 1, 3);
-            if (color.isValid()) {
-                check->setForeground(QBrush(color));
-                core->setForeground(QBrush(color));
-                info->setForeground(QBrush(color));
-            }
             continue;
         }
 
-        auto* installed = new QTableWidgetItem(row.value(QStringLiteral("installed")).toString());
+        auto* installed = new QTableWidgetItem;
         installed->setFlags(Qt::ItemIsEnabled);
         auto* arrow = new QTableWidgetItem(QStringLiteral(">"));
         arrow->setFlags(Qt::ItemIsEnabled);
-        auto* downloaded = new QTableWidgetItem(row.value(QStringLiteral("downloaded")).toString());
+        auto* downloaded = new QTableWidgetItem;
         downloaded->setFlags(Qt::ItemIsEnabled);
         m_table->setItem(r, 2, installed);
         m_table->setItem(r, 3, arrow);
         m_table->setItem(r, 4, downloaded);
-
-        if (color.isValid()) {
-            const QBrush brush(color);
-            check->setForeground(brush);
-            core->setForeground(brush);
-            installed->setForeground(brush);
-            arrow->setForeground(brush);
-            downloaded->setForeground(brush);
-        }
     }
 
+    m_filling = false;
+    for (int r = 0; r < rowCount; ++r) updateRowAppearance(r);
     updateAllState();
 }
 
 void CoreVersionsPanel::clear() {
+    m_filling = true;
+    m_rows.clear();
     m_title->setText(tr("Downloaded cores"));
     m_note->hide();
     m_table->clearSpans();
     m_table->clearContents();
     m_table->setRowCount(0);
+    m_filling = false;
     m_all->setEnabled(false);
     QSignalBlocker blocker(m_all);
     m_all->setCheckState(Qt::Unchecked);
@@ -274,12 +275,88 @@ bool CoreVersionsPanel::hasRows() const {
     return m_table && m_table->rowCount() > 0;
 }
 
+QStringList CoreVersionsPanel::ignoredFiles() const {
+    QStringList files;
+    for (const QString& file : m_ignored) files << file;
+    files.sort();
+    return files;
+}
+
+void CoreVersionsPanel::loadIgnored() {
+    QSettings settings(QSettings::IniFormat, QSettings::UserScope,
+                       QStringLiteral("KarabasFlasher"), QStringLiteral("KarabasFlasher"));
+    const QStringList files = settings.value(QStringLiteral("ignoredCores")).toStringList();
+    for (const QString& file : files) {
+        const QString key = file.trimmed().toLower();
+        if (!key.isEmpty()) m_ignored.insert(key);
+    }
+}
+
+void CoreVersionsPanel::saveIgnored() {
+    QStringList files;
+    for (const QString& file : m_ignored) files << file;
+    files.sort();
+    QSettings settings(QSettings::IniFormat, QSettings::UserScope,
+                       QStringLiteral("KarabasFlasher"), QStringLiteral("KarabasFlasher"));
+    settings.setValue(QStringLiteral("ignoredCores"), files);
+}
+
+void CoreVersionsPanel::updateRowAppearance(int row) {
+    if (!m_table || row < 0 || row >= static_cast<int>(m_rows.size())) return;
+    const QVariantMap data = m_rows.at(row).toMap();
+    const QString state = data.value(QStringLiteral("state")).toString();
+    const bool notSupported = state == QLatin1String("notSupported");
+    const bool parseError = state == QLatin1String("parseError");
+    const bool blocked = notSupported || parseError;
+
+    QTableWidgetItem* check = m_table->item(row, 0);
+    QTableWidgetItem* core = m_table->item(row, 1);
+    QTableWidgetItem* second = m_table->item(row, 2);
+    QTableWidgetItem* arrow = m_table->item(row, 3);
+    QTableWidgetItem* downloaded = m_table->item(row, 4);
+    if (!check || !core || !second) return;
+
+    const bool ignored = check->checkState() == Qt::PartiallyChecked;
+    QColor color;
+    if (ignored) color = QColor(QStringLiteral("#57606a"));
+    else if (state == QLatin1String("newer")) color = QColor(QStringLiteral("#2ea043"));
+    else if (state == QLatin1String("older")) color = QColor(QStringLiteral("#b58900"));
+    else if (blocked) color = QColor(QStringLiteral("#e04040"));
+
+    QSignalBlocker blocker(m_table);
+    if (blocked) {
+        const QString original = notSupported
+            ? QStringLiteral("> ") + tr("not supported for your Karabas")
+            : QStringLiteral("> ") + tr("cannot read the downloaded core header: %1")
+                  .arg(data.value(QStringLiteral("detail")).toString());
+        second->setText(ignored ? QStringLiteral("> ") + tr("ignored") : original);
+        second->setToolTip(original);
+        m_table->setSpan(row, 2, 1, 3);
+    } else {
+        second->setText(ignored ? tr("ignored") : data.value(QStringLiteral("installed")).toString());
+        if (arrow) arrow->setText(QStringLiteral(">"));
+        if (downloaded) downloaded->setText(data.value(QStringLiteral("downloaded")).toString());
+    }
+
+    auto applyColor = [&](QTableWidgetItem* item) {
+        if (!item) return;
+        if (color.isValid()) item->setForeground(QBrush(color));
+        else item->setData(Qt::ForegroundRole, QVariant());
+    };
+    applyColor(check);
+    applyColor(core);
+    applyColor(second);
+    applyColor(arrow);
+    applyColor(downloaded);
+}
+
 void CoreVersionsPanel::applyAllMode(AllMode mode) {
     if (!m_table) return;
     QSignalBlocker blocker(m_table);
     for (int r = 0; r < m_table->rowCount(); ++r) {
         QTableWidgetItem* item = m_table->item(r, 0);
         if (!item || !(item->flags() & Qt::ItemIsUserCheckable)) continue;
+        if (item->checkState() == Qt::PartiallyChecked) continue;   // ignored не трогаем
         const QTableWidgetItem* core = m_table->item(r, 1);
         const bool isNew = core && core->data(Qt::UserRole).toString() == QLatin1String("newer");
         const bool checked = mode == AllMode::All || (mode == AllMode::New && isNew);
@@ -293,12 +370,17 @@ void CoreVersionsPanel::updateAllState() {
 
     int total = 0;
     int checked = 0;
+    int ignored = 0;
     int newTotal = 0;
     int newChecked = 0;
     int nonNewChecked = 0;
     for (int r = 0; r < m_table->rowCount(); ++r) {
         QTableWidgetItem* item = m_table->item(r, 0);
         if (!item || !(item->flags() & Qt::ItemIsUserCheckable)) continue;
+        if (item->checkState() == Qt::PartiallyChecked) {
+            ++ignored;
+            continue;
+        }
         ++total;
         const QTableWidgetItem* core = m_table->item(r, 1);
         const bool isNew = core && core->data(Qt::UserRole).toString() == QLatin1String("newer");
@@ -311,11 +393,12 @@ void CoreVersionsPanel::updateAllState() {
     }
 
     m_newTotal = newTotal;
+    m_all->setEnabled(total > 0);
     if (total == 0) {
         m_allMode = AllMode::None;
         QSignalBlocker blocker(m_all);
         m_all->setCheckState(Qt::Unchecked);
-        m_count->setText(tr("No cores"));
+        m_count->setText(ignored > 0 ? tr("All cores are ignored") : tr("No cores"));
         return;
     }
 
@@ -331,7 +414,9 @@ void CoreVersionsPanel::updateAllState() {
     case AllMode::New: modeName = tr("only new"); break;
     default: modeName = tr("custom"); break;
     }
-    m_count->setText(tr("Checked: %1 of %2 (%3)").arg(checked).arg(total).arg(modeName));
+    QString countText = tr("Checked: %1 of %2 (%3)").arg(checked).arg(total).arg(modeName);
+    if (ignored > 0) countText += tr(", ignored: %1").arg(ignored);
+    m_count->setText(countText);
 
     QSignalBlocker blocker(m_all);
     if (m_allMode == AllMode::All) m_all->setCheckState(Qt::Checked);

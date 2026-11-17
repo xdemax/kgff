@@ -357,6 +357,7 @@ Params MainWindow::collectParams() const {
     const bool hasCoreRows = m_corePanel && m_corePanel->hasRows();
     p.coreSelectionSet = hasCoreRows;
     p.selectedCoreFiles = hasCoreRows ? m_corePanel->selectedFiles() : QStringList();
+    p.ignoredCoreFiles = m_corePanel ? m_corePanel->ignoredFiles() : QStringList();
     return p;
 }
 

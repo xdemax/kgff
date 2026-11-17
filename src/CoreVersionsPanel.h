@@ -1,4 +1,5 @@
 #pragma once
+#include <QSet>
 #include <QStringList>
 #include <QVariantList>
 #include <QWidget>
@@ -8,7 +9,8 @@ class QLabel;
 class QTableWidget;
 
 // Правая панель главного окна: сравнение версий и выбор ядер для копирования.
-// Зелёные строки (скачанная версия новее) отмечены по умолчанию.
+// Зелёные строки (скачанная версия новее) отмечены по умолчанию; третье
+// состояние точки — ignored: ядро не копируется и запоминается в QSettings.
 class CoreVersionsPanel : public QWidget {
     Q_OBJECT
 public:
@@ -20,12 +22,17 @@ public:
 
     // Имена файлов, отмеченных для копирования на SD-карту.
     QStringList selectedFiles() const;
+    // Постоянно игнорируемые ядра (третье состояние точки).
+    QStringList ignoredFiles() const;
 
 private:
     enum class AllMode { All, None, New, Custom };
 
     void applyAllMode(AllMode mode);
     void updateAllState();
+    void updateRowAppearance(int row);
+    void loadIgnored();
+    void saveIgnored();
 
     QLabel* m_title = nullptr;
     QLabel* m_note = nullptr;
@@ -34,4 +41,7 @@ private:
     QLabel* m_count = nullptr;
     AllMode m_allMode = AllMode::New;
     int m_newTotal = 0;         // сколько ядер вообще можно считать «новыми»
+    QVariantList m_rows;        // исходные данные строк для перерисовки
+    QSet<QString> m_ignored;    // имена файлов в нижнем регистре
+    bool m_filling = false;     // защита от itemChanged во время заполнения
 };
