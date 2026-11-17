@@ -19,7 +19,7 @@
 - **Обновляет прошивку** платы (микроконтроллер RP2040).
 - **Заменяет ядра** (файлы `.kg`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
 - **Читает версии ядер** из заголовков `.kg` (kgo2) для выбранной модели платы и использует их для сравнения; подробный список пишется в файловый журнал при `--log`.
-- **Сравнивает версии с картой** и открывает окно `установленная > загруженная`: зелёным — загруженная версия новее, жёлтым — установленная новее, красным — ядро не поддерживается этой платой или его заголовок не читается. Зелёные ядра отмечены по умолчанию; выбор можно изменить вручную или чекбоксом **All selected** (все / ни одного / только новые).
+- **Сравнивает версии с картой** в правой панели главного окна: зелёным — загруженная версия новее, жёлтым — установленная новее, красным — ядро не поддерживается этой платой или его заголовок не читается. Если ядра нет на карте, строка выглядит как `not installed > загруженная версия`. Панель свернута по умолчанию, раскрывается кнопкой **`>>`** и автоматически после парсинга ядер; при раскрытии окно центрируется по итоговой ширине обеих половин. Зелёные ядра отмечены, выбор можно изменить вручную или чекбоксом **All selected** (все / ни одного / только новые). Ядро со статусом `not supported` по умолчанию не отмечено: его точка красная. Если включить — точка станет зелёной, и ядро скопируется на карту; если снять — снова красная.
 - **Открывает SD-карту платы** как обычный диск, чтобы вы могли работать с её файлами напрямую.
 - **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.zip` на SD-карту. Файлы, которые уже есть на карте, заменяются; остальные файлы пользователя не трогаются. Перед копированием проверяется свободное место, а перед распаковкой — распакованный размер архива (лимит 2 ГБ). Симлинки из архива не копируются.
 
@@ -44,9 +44,10 @@
    Можно отметить любые галки в любом сочетании.
 4. Нажмите **Download via GitHub**. Программа скачает всё отмеченное. Ядер много, и скорость зависит от вашего интернета;
    ход загрузки виден в журнале внизу окна. После загрузки ядер программа читает их версии из заголовков `.kg`
-   и открывает окно сравнения с версиями на карте: `установленная > загруженная`. Зелёные ядра отмечены
-   по умолчанию; точки можно поставить или снять вручную, а чекбокс **All selected** переключает
-   все / ни одного / только новые. На карту копируются только отмеченные ядра.
+   и раскрывает справа панель сравнения с версиями на карте: `установленная > загруженная`. Зелёные ядра
+   отмечены по умолчанию; точки можно поставить или снять вручную, а чекбокс **All selected** переключает
+   все / ни одного / только новые. Панель можно свернуть кнопкой **`<<`** и снова раскрыть **`>>`**. На карту
+   копируются только отмеченные ядра.
 5. В списке **Serial port** выберите порт платы. В списке показываются только USB-устройства; нужный порт появляется,
    когда плата подключена (если его нет, нажмите **Refresh ports**). Пункт «(not selected - flash without reset)» нужен,
    только если плата уже переведена в режим загрузчика вручную.
@@ -183,7 +184,7 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 - **Updates the board firmware** (RP2040 microcontroller).
 - **Replaces cores** (`.kg` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
 - **Reads core versions** from the `.kg` headers (kgo2) for the selected board model and uses them for comparison; the detailed list goes to the file log with `--log`.
-- **Compares versions with the card** and opens a window with `installed > downloaded`: green means the downloaded version is newer, yellow means the installed version is newer, red means the core is not supported by this board or its header cannot be read. Green cores are checked by default; the selection can be changed manually or with the **All selected** checkbox (all / none / only new).
+- **Compares versions with the card** in the right-hand panel of the main window: green means the downloaded version is newer, yellow means the installed version is newer, red means the core is not supported by this board or its header cannot be read. If the core is not on the card, the row shows `not installed > downloaded version`. The panel is collapsed by default, expands with **`>>`** and automatically after core parsing; when expanded, the window is centred using the full width of both halves. Green cores are checked, and the selection can be changed manually or with the **All selected** checkbox (all / none / only new). A core marked `not supported` is unchecked by default and its dot is red. Checking it turns the dot green and copies the core; unchecking turns it red again.
 - **Opens the board's SD card** as a regular drive so you can work with its files directly.
 
 Firmware and cores can be updated together or separately — for example, cores only.
@@ -207,9 +208,10 @@ Firmware and cores can be updated together or separately — for example, cores 
    You can check any combination of these.
 4. Click **Download via GitHub**. The program downloads everything that is checked. There are many cores, and the speed
    depends on your internet connection; progress is shown in the log at the bottom of the window. After the cores are
-   downloaded, the program reads their versions from the `.kg` headers and opens a comparison window with the versions
-   on the card: `installed > downloaded`. Green cores are checked by default; change the checkboxes manually or use
-   **All selected** to cycle all / none / only new. Only checked cores are copied to the card.
+   downloaded, the program reads their versions from the `.kg` headers and expands the comparison panel on the right
+   with the versions on the card: `installed > downloaded`. Green cores are checked by default; change the checkboxes
+   manually or use **All selected** to cycle all / none / only new. Collapse the panel with **`<<`**, expand it again
+   with **`>>`**. Only checked cores are copied to the card.
 5. In the **Serial port** list, select the board's port. Only USB devices are shown; the required port appears
    when the board is connected (if it is missing, click **Refresh ports**). The "(not selected - flash without reset)"
    item is only needed if the board has already been put into bootloader mode manually.

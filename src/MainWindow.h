@@ -8,6 +8,7 @@
 
 class QButtonGroup;
 class QCheckBox;
+class CoreVersionsPanel;
 class QComboBox;
 class QLineEdit;
 class QPlainTextEdit;
@@ -53,6 +54,9 @@ private:
     void writeLogLine(const QString& line);
     void cleanupTemp();
     void stopThread();
+    void showCorePanel();
+    void hideCorePanel();
+    void centerWindowForWidth(int outerWidth);
 
     QComboBox* m_modelCombo = nullptr;
     QPushButton* m_detectBtn = nullptr;    // кнопка-лупа: автоопределение модели
@@ -71,6 +75,8 @@ private:
     QPushButton* m_mscMode2Btn = nullptr;  // режим MSC 2 (AT+KARABAS=msc2)
     QButtonGroup* m_mscModeGroup = nullptr; // взаимоисключающая группа кнопок режима MSC
     QToolButton* m_mscHelp = nullptr;      // значок «?» с подсказкой про режим кард-ридера
+    QToolButton* m_panelToggle = nullptr;  // «>>»/«<<»: свернуть/развернуть панель ядер
+    CoreVersionsPanel* m_corePanel = nullptr;
     QPlainTextEdit* m_log = nullptr;
 
     QProcess* m_accessProc = nullptr;     // pkexec: установка правила udev
@@ -79,8 +85,7 @@ private:
 
     QString m_firmwarePath;
     int m_firmwareModelIndex = -1;        // модель, для которой скачана/выбрана прошивка
-    QStringList m_selectedCoreFiles;      // выбор из окна сравнения версий
-    bool m_coreSelectionSet = false;      // true: копировать только выбранные ядра
+    int m_collapsedWidth = 0;             // ширина окна до раскрытия панели ядер
     bool m_busy = false;
     bool m_closeRequested = false;
     bool m_accessRuleInstalled = false;   // правило udev уже ставилось в этом запуске

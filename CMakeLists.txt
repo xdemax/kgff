@@ -107,8 +107,8 @@ qt_add_executable(KarabasFlasher WIN32 MACOSX_BUNDLE
     src/Models.h
     src/CoreFile.cpp
     src/CoreFile.h
-    src/CoreVersionsDialog.cpp
-    src/CoreVersionsDialog.h
+    src/CoreVersionsPanel.cpp
+    src/CoreVersionsPanel.h
     src/Uf2.cpp
     src/Uf2.h
     src/Util.cpp

@@ -1,6 +1,6 @@
 #include "MainWindow.h"
 
-#include "CoreVersionsDialog.h"
+#include "CoreVersionsPanel.h"
 #include "Models.h"
 #include "Uf2.h"
 #include "Util.h"
@@ -15,6 +15,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QGridLayout>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
@@ -27,6 +28,7 @@
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
+#include <QScreen>
 #include <QSerialPortInfo>
 #include <QStandardPaths>
 #include <QThread>
@@ -45,7 +47,11 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     }
     setWindowIcon(appIcon);
 
-    auto* root = new QVBoxLayout(this);
+    auto* outer = new QHBoxLayout(this);
+    outer->setContentsMargins(9, 9, 9, 9);
+    auto* left = new QWidget(this);
+    auto* root = new QVBoxLayout(left);
+    root->setContentsMargins(0, 0, 0, 0);
 
     root->addWidget(new QLabel(tr("Select Device Model:")));
     auto* row1 = new QHBoxLayout;
@@ -182,7 +188,27 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     m_log->setMaximumBlockCount(5000);          // старые строки отбрасываются автоматически
     root->addWidget(m_log, 1);
 
-    resize(520, 600);
+    // Правая половина главного окна: панель ядер. По умолчанию свернута;
+    // «>>» разворачивает её, «<<» сворачивает.
+    m_corePanel = new CoreVersionsPanel(this);
+    m_corePanel->hide();
+    m_panelToggle = new QToolButton(this);
+    m_panelToggle->setText(QStringLiteral(">>"));
+    m_panelToggle->setAutoRaise(true);
+    m_panelToggle->setFixedWidth(18);
+    m_panelToggle->setToolTip(tr("Show core versions"));
+    m_panelToggle->setCursor(Qt::PointingHandCursor);
+    m_panelToggle->setFocusPolicy(Qt::NoFocus);
+    connect(m_panelToggle, &QToolButton::clicked, this, [this]() {
+        if (m_corePanel->isVisible()) hideCorePanel();
+        else showCorePanel();
+    });
+
+    outer->addWidget(left, 1);
+    outer->addWidget(m_panelToggle, 0, Qt::AlignVCenter);
+    outer->addWidget(m_corePanel, 1);
+
+    resize(538, 600);       // 520 px контента + 18 px на кнопку панели
 
     // ---- Рабочий поток ----
     m_thread = new QThread(this);
@@ -223,9 +249,9 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
         }
         // Выбор ядер зависит от модели: для другой платы часть ядер может быть
         // недоступна, поэтому старый выбор сбрасываем.
-        if (m_coreSelectionSet) {
-            m_coreSelectionSet = false;
-            m_selectedCoreFiles.clear();
+        if (m_corePanel && m_corePanel->hasRows()) {
+            m_corePanel->clear();
+            hideCorePanel();
             appendLog(QStringLiteral("Device model changed; the core selection was reset. Download the cores "
                                      "again to choose what to update."));
         }
@@ -328,8 +354,9 @@ Params MainWindow::collectParams() const {
     p.portLocation = m_comCombo->currentData().toString();
     p.firmwarePath = m_firmwarePath;
     p.mscMode = (m_mscModeGroup->checkedId() == 2) ? 2 : 1;
-    p.coreSelectionSet = m_coreSelectionSet;
-    p.selectedCoreFiles = m_selectedCoreFiles;
+    const bool hasCoreRows = m_corePanel && m_corePanel->hasRows();
+    p.coreSelectionSet = hasCoreRows;
+    p.selectedCoreFiles = hasCoreRows ? m_corePanel->selectedFiles() : QStringList();
     return p;
 }
 
@@ -343,7 +370,8 @@ void MainWindow::setBusy(bool busy) {
                        static_cast<QWidget*>(m_refreshBtn), static_cast<QWidget*>(m_flashBtn),
                        static_cast<QWidget*>(m_mscBtn), static_cast<QWidget*>(m_mscMode1Btn),
                        static_cast<QWidget*>(m_mscMode2Btn), static_cast<QWidget*>(m_mscHelp),
-                       static_cast<QWidget*>(m_detectBtn)}) {
+                       static_cast<QWidget*>(m_detectBtn), static_cast<QWidget*>(m_panelToggle),
+                       static_cast<QWidget*>(m_corePanel)}) {
         w->setEnabled(en);
     }
     if (en) m_downloadBtn->setText(tr("Download via GitHub"));
@@ -384,10 +412,10 @@ void MainWindow::updateActionState() {
 // ----------------------------------------------------------------------------
 void MainWindow::onDownload() {
     if (m_busy) return;
-    // Новое скачивание ядер заново выставит выбор в окне сравнения.
+    // Новое скачивание ядер заново выставит выбор в панели сравнения.
     if (m_coresChk->isChecked()) {
-        m_coreSelectionSet = false;
-        m_selectedCoreFiles.clear();
+        m_corePanel->clear();
+        hideCorePanel();
     }
     setBusy(true);
     m_downloadBtn->setText(tr("Downloading..."));
@@ -537,14 +565,58 @@ void MainWindow::onConfirmUnrecognizedDrive(const QString& node, const QString& 
 
 void MainWindow::onCoreVersionsReady(const QVariantList& rows, const QString& boardName,
                                      bool installedKnown) {
-    CoreVersionsDialog dialog(rows, boardName, installedKnown, this);
-    dialog.exec();
-    // Окно закрывается любым способом — выбор всё равно применяем. По умолчанию
-    // отмечены только зелёные (более новые) ядра.
-    m_selectedCoreFiles = dialog.selectedFiles();
-    m_coreSelectionSet = true;
-    appendLog(QStringLiteral("Cores selected for update: %1.").arg(m_selectedCoreFiles.size()));
-    updateActionState();
+    m_corePanel->setRows(rows, boardName, installedKnown);
+    showCorePanel();        // после парсинга панель раскрывается сама
+}
+
+void MainWindow::showCorePanel() {
+    if (!m_corePanel || m_corePanel->isVisible()) return;
+
+    // Запоминаем внешнюю ширину свёрнутого окна, а не клиентскую.
+    m_collapsedWidth = frameGeometry().width();
+    m_corePanel->show();
+    m_panelToggle->setText(QStringLiteral("<<"));
+    m_panelToggle->setToolTip(tr("Hide core versions"));
+
+    // Вторая половина: окно расширяется примерно вдвое, чтобы панель не
+    // отнимала место у журнала. Центрируем уже итоговую ширину целиком.
+    const int target = qMax(m_collapsedWidth * 2, m_collapsedWidth + 360);
+    centerWindowForWidth(target);
+}
+
+void MainWindow::hideCorePanel() {
+    if (!m_corePanel || !m_corePanel->isVisible()) return;
+
+    m_corePanel->hide();
+    m_panelToggle->setText(QStringLiteral(">>"));
+    m_panelToggle->setToolTip(tr("Show core versions"));
+    if (m_collapsedWidth > 0) centerWindowForWidth(m_collapsedWidth);
+}
+
+void MainWindow::centerWindowForWidth(int outerWidth) {
+    QScreen* screen = QGuiApplication::screenAt(frameGeometry().center());
+    if (!screen) screen = QGuiApplication::primaryScreen();
+    const QRect available = screen ? screen->availableGeometry() : QRect();
+    if (available.isEmpty()) {
+        resize(qMax(1, outerWidth), height());
+        return;
+    }
+
+    // frame* — толщина рамки оконного менеджера; geometry() задаёт клиентскую
+    // область, поэтому центрируем внешний прямоугольник и переводим его обратно.
+    const QRect frame = frameGeometry();
+    const int frameWidth = frame.width() - width();
+    const int frameHeight = frame.height() - height();
+    const int frameLeft = frame.left() - x();
+    const int frameTop = frame.top() - y();
+
+    const int targetOuterWidth = qMin(outerWidth, available.width());
+    const int targetOuterHeight = qMin(frame.height(), available.height());
+    const int clientWidth = qMax(1, targetOuterWidth - frameWidth);
+    const int clientHeight = qMax(1, targetOuterHeight - frameHeight);
+    const int clientX = available.left() + (available.width() - targetOuterWidth) / 2 + frameLeft;
+    const int clientY = available.top() + (available.height() - targetOuterHeight) / 2 + frameTop;
+    setGeometry(clientX, clientY, clientWidth, clientHeight);
 }
 
 void MainWindow::onFirmwareReady(const QString& path) {
