@@ -17,7 +17,7 @@
 Готовый пакет лежит в разделе Releases на GitHub (для Ubuntu 24.04 и новее). `apt` сам доставит все
 зависимости (Qt 6, udisks2 и т.д.) и установит правило доступа к порту:
 
-    sudo apt install ./karabas-flasher_1.2.1_amd64_ubuntu24.04.deb
+    sudo apt install ./karabas-flasher_1.2.2_amd64_ubuntu24.04.deb
 
 **Ubuntu 22.04 и старше:** в их репозиториях нет Qt SerialPort (`libqt6serialport6`), поэтому `.deb` не подойдёт - 
 используйте AppImage (Qt внутри). На Debian 12 `.deb` не проверялся: он собран на Ubuntu 24.04 и может требовать более новую glibc.
@@ -28,8 +28,8 @@
 
 **AppImage (любой дистрибутив).** В релизе есть один файл `KarabasFlasher-<версия>-x86_64.AppImage` с Qt внутри:
 
-    chmod +x KarabasFlasher-1.2.1-x86_64.AppImage
-    ./KarabasFlasher-1.2.1-x86_64.AppImage
+    chmod +x KarabasFlasher-1.2.2-x86_64.AppImage
+    ./KarabasFlasher-1.2.2-x86_64.AppImage
 
 На некоторых системах нужен пакет `libfuse2` (иначе: `./KarabasFlasher-...AppImage --appimage-extract-and-run`).
 Системные части (udisks2, polkit, systemd) должны быть установлены - на обычном рабочем столе они уже есть.
@@ -109,7 +109,7 @@ LGPL-3.0 (подключается динамически; подробност�
 Оттуда она попадает в заголовок окна, в журнал (вместе с описанием из git, например `v0.1.0-3-gabc1234`),
 в `--version` и в версию macOS-приложения. Схема `MAJOR.MINOR.PATCH`: исправление ошибки - PATCH,
 новая возможность - MINOR, несовместимое изменение - MAJOR. Все три системы проверены на железе,
-поэтому используются версии `1.x` (текущая - `1.2.1`).
+поэтому используются версии `1.x` (текущая - `1.2.2`).
 
 Как выпустить версию:
 

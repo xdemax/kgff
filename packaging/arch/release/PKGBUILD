@@ -3,7 +3,7 @@
 #   cd packaging/arch/release && updpkgsums && makepkg -si
 # pkgver должен совпадать с версией в CMakeLists.txt и с тегом (v$pkgver).
 pkgname=karabas-flasher
-pkgver=1.2.1
+pkgver=1.2.2
 pkgrel=1
 pkgdesc="Firmware and core flasher for Karabas Go boards (Qt 6)"
 arch=('x86_64' 'aarch64')
