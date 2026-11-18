@@ -34,10 +34,14 @@ private slots:
     void onMsc();
     void onDetectModel();
     void onAutoDetectModel();
+    void onStartupFirmwareCheck();
+    void onStartupFirmwareCheckFinished();
     void onModelDetected(int modelIndex, const QString& raw);
     void appendLog(const QString& message);
     void appendLogVerbose(const QString& message);
     void onCoreVersionsReady(const QVariantList& rows, const QString& boardName, bool installedKnown);
+    void onFirmwareStatusReady(bool known, bool needsUpdate,
+                               const QString& installed, const QString& latest);
     void onFirmwareReady(const QString& path);
     void onWorkerFinished();
     void onPortAccessDenied(const QString& portLocation);
@@ -86,6 +90,7 @@ private:
     QString m_firmwarePath;
     int m_firmwareModelIndex = -1;        // модель, для которой скачана/выбрана прошивка
     int m_collapsedWidth = 0;             // ширина окна до раскрытия панели ядер
+    bool m_startupAutoDetectPending = false;
     bool m_busy = false;
     bool m_closeRequested = false;
     bool m_accessRuleInstalled = false;   // правило udev уже ставилось в этом запуске

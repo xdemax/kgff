@@ -16,12 +16,13 @@
 ## Что умеет программа
 
 - **Скачивает** актуальные прошивки и ядра из репозитория автора плат на GitHub (`karabas-go`).
+- **Проверяет актуальную сборку прошивки** по последнему коммиту выбранного файла в каталоге `firmware` на GitHub: при запуске для всех моделей и перед скачиванием прошивки или ядер. Если обновляются ядра, панель показывает состояние прошивки платы: мигающее красное `Firmware needs an update!` или зелёное `Firmware is up to date.`
 - **Обновляет прошивку** платы (микроконтроллер RP2040).
 - **Заменяет ядра** (файлы `.kg`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
 - **Читает версии ядер** из заголовков `.kg` (kgo2) для выбранной модели платы и использует их для сравнения; подробный список пишется в файловый журнал при `--log`.
 - **Сравнивает версии с картой** в правой панели главного окна: зелёным — загруженная версия новее, жёлтым — установленная новее, красным — ядро не поддерживается этой платой или его заголовок не читается. Если ядра нет на карте, строка выглядит как `not installed > загруженная версия`. Панель свернута по умолчанию, раскрывается кнопкой **`>>`** и автоматически после парсинга ядер; при раскрытии окно центрируется по итоговой ширине обеих половин. Зелёные ядра отмечены, выбор можно изменить вручную или чекбоксом **All selected** (все / ни одного / только новые). Точка ядра имеет три состояния: обновить → **ignored** → пропустить. В состоянии `ignored` строка становится тёмно-серой, в колонке `Installed` пишется `ignored`, новая версия не копируется, а старая версия с карты переносится в `backup_*`, чтобы этого ядра на карте не осталось. Пользовательские ядра, которых нет в GitHub, при этом не трогаются. Список игнорируемых сохраняется между запусками. Ядро `not supported` по умолчанию красное; при выборе точка становится зелёной, при игнорировании — тёмно-серой, после снятия — снова красной.
 - **Открывает SD-карту платы** как обычный диск, чтобы вы могли работать с её файлами напрямую.
-- **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.zip` на SD-карту. Файлы, которые уже есть на карте, заменяются; остальные файлы пользователя не трогаются. Перед копированием проверяется свободное место, а перед распаковкой — распакованный размер архива (лимит 2 ГБ). Симлинки из архива не копируются.
+- **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.zip` на SD-карту. Файлы, которые уже есть на карте, заменяются; остальные файлы пользователя не трогаются. Перед копированием проверяется свободное место, а перед распаковкой — распакованный размер архива (лимит 2 ГБ). Симлинки из архива не копируются. **Сейчас функция временно отключена в интерфейсе.**
 
 Прошивку и ядра можно обновлять вместе или по отдельности: например, только ядра.
 
@@ -57,8 +58,10 @@
 
 ### Автоопределение модели
 
-При запуске, если найден ровно один USB-порт, программа сразу в фоне отправляет плате команду
-`AT+KARABAS=version` и выставляет модель автоматически. Сразу после ответа на неё отправляется
+При запуске программа сначала в фоне проверяет последние сборки прошивки для всех моделей по
+Atom-лентам коммитов на GitHub (до трёх попыток). Если проверить не удалось, работа продолжается
+как обычно. Затем, если найден ровно один USB-порт, отправляется команда `AT+KARABAS=version`
+и модель выставляется автоматически. Сразу после ответа на неё отправляется
 `AT+KARABAS=list`: программа получает список ядер на SD-карте и использует его для сравнения версий.
 Подробный список пишется только в файловый журнал при запуске с `--log`; на экран он не выводится.
 Если `list` не поддерживается, определение модели всё равно продолжается. Если порт промолчал
@@ -180,7 +183,8 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 ### What the program does
 
 - **Downloads** the latest firmware and cores from the board author's GitHub repository (`karabas-go`).
-- **Copies extra content** (ROMs, disk images, etc.) from the `extra.zip` archive to the SD card. Files that already exist on the card are replaced; other user files are left untouched. Free space is checked before copying, and the unpacked archive size is checked before extraction (2 GB limit). Symbolic links from the archive are not copied.
+- **Checks the current firmware build** from the latest commit of the selected file in the GitHub `firmware` directory: for all models at startup and before downloading firmware or cores. When cores are updated, the panel shows the board firmware state: a blinking red `Firmware needs an update!` or a green `Firmware is up to date.`
+- **Copies extra content** (ROMs, disk images, etc.) from the `extra.zip` archive to the SD card. Files that already exist on the card are replaced; other user files are left untouched. Free space is checked before copying, and the unpacked archive size is checked before extraction (2 GB limit). Symbolic links from the archive are not copied. **This feature is temporarily disabled in the UI.**
 - **Updates the board firmware** (RP2040 microcontroller).
 - **Replaces cores** (`.kg` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
 - **Reads core versions** from the `.kg` headers (kgo2) for the selected board model and uses them for comparison; the detailed list goes to the file log with `--log`.
@@ -222,9 +226,11 @@ the program will ask for confirmation and stop at a safe point.
 
 ### Automatic model detection
 
-On startup, if exactly one USB port is found, the program immediately sends the `AT+KARABAS=version`
-command to the board in the background and selects the model automatically. Immediately after the reply
-it sends `AT+KARABAS=list`: the program gets the cores on the SD card and uses them for version comparison.
+On startup the program first checks the latest firmware builds for all models in the background using
+the Atom commit feeds on GitHub (up to three attempts). If the check fails, it continues as usual.
+Then, if exactly one USB port is found, it sends the `AT+KARABAS=version` command to the board and selects
+the model automatically. Immediately after the reply it sends `AT+KARABAS=list`: the program gets the
+cores on the SD card and uses them for version comparison.
 The detailed list is written only to the file log with `--log`; it is not shown in the on-screen log.
 If `list` is not supported, model detection still continues. If the port stays silent
 (board not connected, old firmware, port busy), you can pick the model manually or click the magnifier.

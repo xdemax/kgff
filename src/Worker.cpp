@@ -46,13 +46,34 @@ const qint64 kMaxExtraBytes = 256 * 1024 * 1024;    // extra.zip
 const QString kCoresCompleteMarker = QStringLiteral("download_complete.txt");
 const QString kExtraCompleteMarker = QStringLiteral("extra_complete.txt");
 const QString kExtraUrl = QStringLiteral("https://raw.githubusercontent.com/xdemax/kgff/refs/heads/main/extra/extra.zip");
+// В дереве firmware версии в именах файлов нет: актуальная сборка видна в
+// сообщении последнего коммита каждого файла ("Firmware build <номер>: ...").
+const QString kFirmwareAtomBase =
+    QStringLiteral("https://github.com/andykarpov/karabas-go/commits/master/firmware/");
+const QString kFirmwareApiBase =
+    QStringLiteral("https://api.github.com/repos/andykarpov/karabas-go/commits?path=firmware/");
 
-QNetworkRequest makeRequest(const QUrl& url) {
+QString firmwareBuildFromText(const QString& text) {
+    static const QRegularExpression re(
+        QStringLiteral("Firmware build\\s+([0-9]+)"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch match = re.match(text);
+    return match.hasMatch() ? match.captured(1) : QString();
+}
+
+QString firmwareAtomUrlForFile(const QString& file) {
+    const QString name = QFileInfo(file).fileName();
+    return kFirmwareAtomBase +
+           QString::fromLatin1(QUrl::toPercentEncoding(name)) +
+           QStringLiteral(".atom");
+}
+
+QNetworkRequest makeRequest(const QUrl& url, int transferTimeoutMs = 20000) {
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("KarabasFlasher/1.0"));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     req.setAttribute(QNetworkRequest::CacheLoadControlAttribute, QNetworkRequest::AlwaysNetwork);
-    req.setTransferTimeout(20000);          // таймаут простоя передачи
+    req.setTransferTimeout(transferTimeoutMs);  // таймаут простоя передачи
     return req;
 }
 
@@ -447,14 +468,16 @@ void Worker::runDetectModel(const Params& p) {
             return;
         }
         QString raw;
+        QString firmware;
         int board = 0;
-        if (!queryVersion(p.portLocation, &raw, &board)) {
+        if (!queryVersion(p.portLocation, &raw, &board, &firmware)) {
             if (p.autoDetect) {
                 emit log(QStringLiteral("Model was not detected automatically: the board did not answer. "
                                         "Choose the model manually or press the magnifier."));
             }
             return;
         }
+        m_boardFirmwareVersion = firmware;
 
         emit log("Device version: " + raw);
 
@@ -477,6 +500,95 @@ void Worker::runDetectModel(const Params& p) {
         emit log("Detected model: " + models().at(modelIndex).name);
         emit modelDetected(modelIndex, raw);
     });
+}
+
+// Стартовая проверка: последние сборки прошивки для всех моделей.
+// Три раунда, в каждом — параллельные Atom-запросы по файлам прошивок.
+void Worker::runStartupFirmwareCheck() {
+    struct Item {
+        int model = 0;
+        QString file;
+        QString version;
+    };
+
+    m_latestFirmwareVersions.clear();
+    QList<Item> items;
+    for (int i = 0; i < models().size(); ++i) {
+        const ModelInfo& model = models().at(i);
+        Item item;
+        item.model = i;
+        item.file = QFileInfo(QUrl(model.firmwareUrl).path()).fileName();
+        items.append(item);
+    }
+
+    emit logVerbose(QStringLiteral("Checking latest firmware versions on GitHub..."));
+    constexpr int kAttempts = 3;
+    constexpr int kTimeoutMs = 5000;
+
+    for (int attempt = 0; attempt < kAttempts && !m_cancel.load(); ++attempt) {
+        QList<int> pending;
+        for (int i = 0; i < items.size(); ++i) {
+            if (items.at(i).version.isEmpty()) pending << i;
+        }
+        if (pending.isEmpty()) break;
+
+        if (attempt > 0) {
+            emit logVerbose(QStringLiteral("Firmware version check: retry %1/%2...")
+                                .arg(attempt + 1).arg(kAttempts));
+            if (!pause(700)) break;
+        }
+
+        QNetworkAccessManager nam;
+        QEventLoop loop;
+        int remaining = pending.size();
+
+        for (int index : pending) {
+            QNetworkReply* reply = nam.get(makeRequest(
+                QUrl(firmwareAtomUrlForFile(items.at(index).file)), kTimeoutMs));
+            QObject::connect(reply, &QNetworkReply::finished, &loop, [&, reply, index]() {
+                if (!m_cancel.load() && reply->error() == QNetworkReply::NoError &&
+                    reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200) {
+                    const QString found = firmwareBuildFromText(QString::fromUtf8(reply->readAll()));
+                    if (!found.isEmpty()) items[index].version = found;
+                }
+                if (--remaining == 0) loop.quit();
+            });
+        }
+
+        QTimer cancelPoll;
+        cancelPoll.setInterval(100);
+        QObject::connect(&cancelPoll, &QTimer::timeout, &loop, [&]() {
+            if (!m_cancel.load()) return;
+            const QList<QNetworkReply*> replies = nam.findChildren<QNetworkReply*>();
+            for (QNetworkReply* reply : replies) reply->abort();
+        });
+        cancelPoll.start();
+        if (remaining > 0) loop.exec();
+        cancelPoll.stop();
+        // reply принадлежат nam и удаляются вместе с ним после завершения раунда.
+    }
+
+    if (m_cancel.load()) {
+        emit logVerbose(QStringLiteral("Firmware version check cancelled."));
+        emit startupFirmwareCheckFinished();
+        return;
+    }
+
+    bool allOk = true;
+    for (const Item& item : items) {
+        if (!item.version.isEmpty()) {
+            m_latestFirmwareVersions.insert(item.model, item.version);
+            emit logVerbose(QStringLiteral("Latest firmware for %1 (%2): %3")
+                                .arg(models().at(item.model).name, item.file, item.version));
+        } else {
+            allOk = false;
+            emit logVerbose(QStringLiteral("Could not determine the latest firmware for %1 (%2).")
+                                .arg(models().at(item.model).name, item.file));
+        }
+    }
+    emit log(allOk ? QStringLiteral("Firmware versions fetched.")
+                   : QStringLiteral("Warning: Firmware version fetch error."));
+    emit startupFirmwareCheckFinished();
 }
 
 // Кнопка «Open SD card in explorer»: режим MSC, ожидание диска, открытие папки карты.
@@ -814,6 +926,60 @@ QStringList Worker::fetchCoresList() {
     return cores;
 }
 
+// Актуальная сборка прошивки. Основной источник — Atom-лента коммитов каталога
+// firmware (без лимита GitHub API); если формат ленты не распознан — API коммитов.
+bool Worker::fetchLatestFirmwareVersion(const QString& firmwareFile, QString* version, QString* error) {
+    if (version) version->clear();
+    if (error) error->clear();
+
+    const QString file = QFileInfo(firmwareFile).fileName();
+    if (file.isEmpty()) {
+        if (error) *error = QStringLiteral("empty firmware file name");
+        return false;
+    }
+    const QString encodedFile = QString::fromLatin1(QUrl::toPercentEncoding(file));
+
+    const HttpResult atom = httpFetch(QUrl(firmwareAtomUrlForFile(file)), kMaxTextBytes, nullptr);
+    if (atom.ok) {
+        const QString found = firmwareBuildFromText(QString::fromUtf8(atom.body));
+        if (!found.isEmpty()) {
+            if (version) *version = found;
+            return true;
+        }
+    }
+    if (m_cancel.load()) {
+        if (error) *error = QStringLiteral("cancelled");
+        return false;
+    }
+
+    const HttpResult api = httpFetch(
+        QUrl(kFirmwareApiBase + encodedFile + QStringLiteral("&per_page=20")),
+        kMaxTextBytes, nullptr);
+    if (!api.ok) {
+        if (error) *error = api.error;
+        return false;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(api.body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isArray()) {
+        if (error) *error = QStringLiteral("invalid JSON from the GitHub commits API");
+        return false;
+    }
+    for (const QJsonValue& value : doc.array()) {
+        const QString message = value.toObject()
+                                    .value(QStringLiteral("commit")).toObject()
+                                    .value(QStringLiteral("message")).toString();
+        const QString found = firmwareBuildFromText(message);
+        if (!found.isEmpty()) {
+            if (version) *version = found;
+            return true;
+        }
+    }
+    if (error) *error = QStringLiteral("Firmware build not found in the commit history");
+    return false;
+}
+
 // ----------------------------------------------------------------------------
 // Скачивание
 // ----------------------------------------------------------------------------
@@ -839,6 +1005,39 @@ void Worker::doDownload(const Params& p) {
     const QString coresDir = wd + QStringLiteral("/cores");
 
     emit log("Starting download for model: " + m.name);
+
+    // Перед прошивкой или ядрами узнаём актуальную сборку в репозитории.
+    // Ошибка этого запроса не мешает скачиванию — просто предупреждение.
+    if (p.updateFirmware || p.updateCores) {
+        const QString firmwareFile = QFileInfo(QUrl(m.firmwareUrl).path()).fileName();
+        QString version;
+        QString versionError;
+        if (fetchLatestFirmwareVersion(firmwareFile, &version, &versionError)) {
+            m_latestFirmwareVersion = version;
+            emit log("Latest firmware on GitHub (" + firmwareFile + "): " + version);
+        } else if (m_cancel.load()) {
+            emit log(QStringLiteral("Operation cancelled by user."));
+            return;
+        } else {
+            emit log("Warning: Could not determine the latest firmware version: " + versionError);
+        }
+    }
+
+    // Для статуса в панели ядер нужна установленная версия прошивки.
+    // Если автоопределение её не получило, пробуем короткий запрос сейчас.
+    if (p.updateCores && m_boardFirmwareVersion.isEmpty() && !p.portLocation.isEmpty()) {
+        QString raw;
+        QString firmware;
+        int board = 0;
+        if (queryVersion(p.portLocation, &raw, &board, &firmware)) {
+            m_boardFirmwareVersion = firmware;
+        }
+        if (m_cancel.load()) {
+            emit log(QStringLiteral("Operation cancelled by user."));
+            return;
+        }
+    }
+
     if (p.updateFirmware) {
         emit log("URL: " + m.firmwareUrl);
 
@@ -887,7 +1086,7 @@ void Worker::doDownload(const Params& p) {
             }
         }
     } else {
-        emit log(QStringLiteral("Skipping extra content download because 'Download extra content' is unchecked."));
+        emit logVerbose(QStringLiteral("Skipping extra content download because 'Download extra content' is disabled."));
     }
 
     if (!p.updateCores) {
@@ -1068,6 +1267,15 @@ void Worker::doDownload(const Params& p) {
     });
     if (!rows.isEmpty()) {
         emit coreVersionsReady(rows, m.name, installedKnown);
+    }
+
+    if (p.updateCores) {
+        QString latest = m_latestFirmwareVersion;
+        if (latest.isEmpty()) latest = m_latestFirmwareVersions.value(p.modelIndex);
+        const bool known = !m_boardFirmwareVersion.isEmpty() && !latest.isEmpty();
+        const bool needsUpdate = known &&
+            compareCoreBuilds(m_boardFirmwareVersion, latest) < 0;
+        emit firmwareStatusReady(known, needsUpdate, m_boardFirmwareVersion, latest);
     }
 
     if (okCount == cores.size()) {
@@ -1267,7 +1475,7 @@ bool Worker::sendMscCommand(const QString& portLocation, int mscMode) {
 }
 
 // Запрос версии: AT+KARABAS=version -> +KARABAS:<firmware>;<board>;<core id>;<core build>
-bool Worker::queryVersion(const QString& portLocation, QString* raw, int* board) {
+bool Worker::queryVersion(const QString& portLocation, QString* raw, int* board, QString* firmware) {
     emit log("Sending AT+KARABAS=version command to " + portLocation + "...");
     m_permissionDenied = false;
 
@@ -1310,6 +1518,7 @@ bool Worker::queryVersion(const QString& portLocation, QString* raw, int* board)
     }
     if (raw) *raw = m.captured(0).trimmed();
     if (board) *board = m.captured(2).toInt();
+    if (firmware) *firmware = m.captured(1).trimmed();
     return true;
 }
 

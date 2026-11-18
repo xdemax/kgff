@@ -7,6 +7,7 @@
 class QCheckBox;
 class QLabel;
 class QTableWidget;
+class QTimer;
 
 // Правая панель главного окна: сравнение версий и выбор ядер для копирования.
 // Зелёные строки (скачанная версия новее) отмечены по умолчанию; третье
@@ -24,6 +25,9 @@ public:
     QStringList selectedFiles() const;
     // Постоянно игнорируемые ядра (третье состояние точки).
     QStringList ignoredFiles() const;
+    // Статус прошивки платы относительно последней сборки на GitHub.
+    void setFirmwareStatus(bool known, bool needsUpdate,
+                           const QString& installed, const QString& latest);
 
 private:
     enum class AllMode { All, None, New, Custom };
@@ -35,10 +39,14 @@ private:
     void saveIgnored();
 
     QLabel* m_title = nullptr;
+    QLabel* m_status = nullptr;
     QLabel* m_note = nullptr;
     QTableWidget* m_table = nullptr;
     QCheckBox* m_all = nullptr;
     QLabel* m_count = nullptr;
+    QTimer* m_blinkTimer = nullptr;
+    bool m_blinkOn = false;
+    bool m_needsUpdate = false;
     AllMode m_allMode = AllMode::New;
     int m_newTotal = 0;         // сколько ядер вообще можно считать «новыми»
     QVariantList m_rows;        // исходные данные строк для перерисовки

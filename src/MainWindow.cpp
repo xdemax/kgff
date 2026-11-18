@@ -91,9 +91,10 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     m_fwChk = new QCheckBox(tr("Update firmware"));
     m_fwChk->setChecked(true);
     m_fwChk->setToolTip(tr("Download and flash the RP2040 firmware of the board."));
-    m_extraChk = new QCheckBox(tr("Download extra content"));
-    m_extraChk->setToolTip(tr("Download the extra content archive and copy its files to the SD card. "
-                              "Files that already exist on the card are replaced; other files are left untouched."));
+    m_extraChk = new QCheckBox(tr("Download extra content (disabled)"));
+    m_extraChk->setChecked(false);
+    m_extraChk->setEnabled(false);
+    m_extraChk->setToolTip(tr("Extra content is temporarily disabled."));
     m_coresChk = new QCheckBox(tr("Update cores"));
     m_coresChk->setToolTip(tr("Download the FPGA cores and replace them on the SD card. "
                               "The old cores are saved to a backup folder on the card."));
@@ -219,6 +220,9 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     connect(m_worker, &Worker::logVerbose, this, &MainWindow::appendLogVerbose);
     connect(m_worker, &Worker::firmwareReady, this, &MainWindow::onFirmwareReady);
     connect(m_worker, &Worker::coreVersionsReady, this, &MainWindow::onCoreVersionsReady);
+    connect(m_worker, &Worker::firmwareStatusReady, this, &MainWindow::onFirmwareStatusReady);
+    connect(m_worker, &Worker::startupFirmwareCheckFinished, this,
+            &MainWindow::onStartupFirmwareCheckFinished);
     connect(m_worker, &Worker::finished, this, &MainWindow::onWorkerFinished);
     connect(m_worker, &Worker::portAccessDenied, this, &MainWindow::onPortAccessDenied);
     connect(m_worker, &Worker::openFolder, this, &MainWindow::onOpenFolder);
@@ -264,12 +268,11 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
               QString::fromLatin1(APP_GIT_DESCRIBE) + QLatin1Char(')'));
     onRefreshPorts();
     appendLog(QStringLiteral("Application is ready."));
-    // Автодетект модели при старте: если найден ровно один USB-порт, сразу
-    // пробуем AT+KARABAS=version в фоне. Если ответа нет - пользователь выберет
-    // модель сам или нажмёт лупу. Не блокирует GUI и не включает setBusy().
-    if (m_comCombo->count() == 2) {     // 0 - "(not selected)", 1 - единственный порт
-        QMetaObject::invokeMethod(this, &MainWindow::onAutoDetectModel, Qt::QueuedConnection);
-    }
+    // Первым делом — версии прошивки для всех моделей на GitHub. После неё
+    // запускаем обычный автодетект модели (если найден ровно один USB-порт).
+    // Обе задачи идут в рабочем потоке и не блокируют GUI.
+    m_startupAutoDetectPending = (m_comCombo->count() == 2);   // 0 - "(not selected)"
+    QMetaObject::invokeMethod(this, &MainWindow::onStartupFirmwareCheck, Qt::QueuedConnection);
 }
 
 MainWindow::~MainWindow() {
@@ -365,7 +368,7 @@ void MainWindow::setBusy(bool busy) {
     m_busy = busy;
     const bool en = !busy;
     for (QWidget* w : {static_cast<QWidget*>(m_modelCombo), static_cast<QWidget*>(m_downloadBtn),
-                       static_cast<QWidget*>(m_fwChk), static_cast<QWidget*>(m_extraChk),
+                       static_cast<QWidget*>(m_fwChk),
                        static_cast<QWidget*>(m_coresChk), static_cast<QWidget*>(m_delTempChk),
                        static_cast<QWidget*>(m_browseBtn), static_cast<QWidget*>(m_comCombo),
                        static_cast<QWidget*>(m_refreshBtn), static_cast<QWidget*>(m_flashBtn),
@@ -461,6 +464,20 @@ void MainWindow::onAutoDetectModel() {
     p.autoDetect = true;
     m_worker->clearCancel();
     QMetaObject::invokeMethod(m_worker, [w = m_worker, p]() { w->runDetectModel(p); }, Qt::QueuedConnection);
+}
+
+void MainWindow::onStartupFirmwareCheck() {
+    m_worker->clearCancel();
+    QMetaObject::invokeMethod(m_worker, [w = m_worker]() { w->runStartupFirmwareCheck(); },
+                              Qt::QueuedConnection);
+}
+
+void MainWindow::onStartupFirmwareCheckFinished() {
+    const bool pending = m_startupAutoDetectPending;
+    m_startupAutoDetectPending = false;
+    // Если пользователь уже запустил другую операцию, не перебиваем её
+    // автоопределением модели.
+    if (pending && !m_busy && !m_closeRequested) onAutoDetectModel();
 }
 
 void MainWindow::onModelDetected(int modelIndex, const QString& raw) {
@@ -568,6 +585,17 @@ void MainWindow::onCoreVersionsReady(const QVariantList& rows, const QString& bo
                                      bool installedKnown) {
     m_corePanel->setRows(rows, boardName, installedKnown);
     showCorePanel();        // после парсинга панель раскрывается сама
+}
+
+void MainWindow::onFirmwareStatusReady(bool known, bool needsUpdate,
+                                       const QString& installed, const QString& latest) {
+    m_corePanel->setFirmwareStatus(known, needsUpdate, installed, latest);
+    if (known) {
+        appendLogVerbose(QStringLiteral("Firmware status: installed %1, latest %2, %3.")
+                             .arg(installed, latest,
+                                  needsUpdate ? QStringLiteral("update needed")
+                                              : QStringLiteral("up to date")));
+    }
 }
 
 void MainWindow::showCorePanel() {

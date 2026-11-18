@@ -1,5 +1,6 @@
 #pragma once
 #include <QByteArray>
+#include <QHash>
 #include <QList>
 #include <QObject>
 #include <QPair>
@@ -49,6 +50,8 @@ public:
     void runFlash(const Params& p);
     void runMsc(const Params& p);
     void runDetectModel(const Params& p);
+    // Стартовая проверка последних сборок прошивки для всех моделей.
+    void runStartupFirmwareCheck();
 
 signals:
     void log(const QString& message);
@@ -63,6 +66,12 @@ signals:
     // Строки сравнения версий: file, installed, downloaded, state (same/newer/older/
     // missing/unknown/notSupported/parseError), detail. Показывается после скачивания ядер.
     void coreVersionsReady(const QVariantList& rows, const QString& boardName, bool installedKnown);
+    // Проверка версий на старте закончена (успешно или нет) — можно запускать
+    // обычное автоопределение модели.
+    void startupFirmwareCheckFinished();
+    // Статус прошивки для панели ядер: known=false — версия неизвестна.
+    void firmwareStatusReady(bool known, bool needsUpdate,
+                             const QString& installed, const QString& latest);
     void portsChanged();                                // список портов мог измениться (MSC, сброс)
     // Запрос подтверждения записи на диск без признаков Карабаса. Отправляется из
     // рабочего потока через Qt::BlockingQueuedConnection: GUI показывает диалог и
@@ -111,9 +120,12 @@ private:
     bool sendAtCommand(const QString& portLocation, const QByteArray& cmd,
                        QByteArray* resp, int timeoutMs, bool waitForOk = false);
     bool sendMscCommand(const QString& portLocation, int mscMode);
-    bool queryVersion(const QString& portLocation, QString* raw, int* board);
+    bool queryVersion(const QString& portLocation, QString* raw, int* board,
+                      QString* firmware = nullptr);
     // Второй запрос после version: список ядер на SD-карте и их версии.
     bool queryCoreList(const QString& portLocation, int board, QList<CoreFileInfo>* out);
+    // Актуальная сборка прошивки из истории каталога firmware на GitHub.
+    bool fetchLatestFirmwareVersion(const QString& firmwareFile, QString* version, QString* error);
     bool resetPortToBootloader(const QString& portLocation);
     bool isPortPresent(const QString& portLocation);
     // Реальная проба: открыть порт и сразу закрыть, ничего не записывая.
@@ -169,6 +181,9 @@ private:
     QList<CoreFileInfo> m_deviceCores;
     int m_deviceCoresBoard = 0;
     bool m_deviceCoresValid = false;
+    QHash<int, QString> m_latestFirmwareVersions;   // model index -> build
+    QString m_latestFirmwareVersion;
+    QString m_boardFirmwareVersion;                 // build из AT+KARABAS=version
 
     std::atomic<bool> m_cancel{false};
     bool m_permissionDenied = false;                    // только рабочий поток

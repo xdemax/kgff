@@ -21,6 +21,7 @@
 #include <QStyleOptionViewItem>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QVariantMap>
 
@@ -117,6 +118,21 @@ CoreVersionsPanel::CoreVersionsPanel(QWidget* parent) : QWidget(parent) {
     m_title->setFont(titleFont);
     m_title->setWordWrap(true);
 
+    m_status = new QLabel;
+    m_status->setVisible(false);
+    m_status->setAlignment(Qt::AlignRight | Qt::AlignTop);
+    m_status->setStyleSheet(QStringLiteral("font-weight: bold;"));
+
+    m_blinkTimer = new QTimer(this);
+    m_blinkTimer->setInterval(600);
+    connect(m_blinkTimer, &QTimer::timeout, this, [this]() {
+        if (!m_needsUpdate || !m_status->isVisible()) return;
+        m_blinkOn = !m_blinkOn;
+        m_status->setStyleSheet(m_blinkOn
+                                    ? QStringLiteral("color: #e04040; font-weight: bold;")
+                                    : QStringLiteral("color: transparent; font-weight: bold;"));
+    });
+
     m_note = new QLabel(tr("Installed versions are unknown: connect the board and press the magnifier, "
                            "or select the serial port before downloading."));
     m_note->setWordWrap(true);
@@ -177,9 +193,13 @@ CoreVersionsPanel::CoreVersionsPanel(QWidget* parent) : QWidget(parent) {
         updateAllState();
     });
 
+    auto* header = new QHBoxLayout;
+    header->addWidget(m_title, 1);
+    header->addWidget(m_status, 0, Qt::AlignTop | Qt::AlignRight);
+
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->addWidget(m_title);
+    layout->addLayout(header);
     layout->addWidget(m_note);
     layout->addLayout(top);
     layout->addWidget(m_table, 1);
@@ -257,6 +277,9 @@ void CoreVersionsPanel::setRows(const QVariantList& rows, const QString& boardNa
 void CoreVersionsPanel::clear() {
     m_filling = true;
     m_rows.clear();
+    m_blinkTimer->stop();
+    m_needsUpdate = false;
+    m_status->hide();
     m_title->setText(tr("Downloaded cores"));
     m_note->hide();
     m_table->clearSpans();
@@ -280,6 +303,29 @@ QStringList CoreVersionsPanel::ignoredFiles() const {
     for (const QString& file : m_ignored) files << file;
     files.sort();
     return files;
+}
+
+void CoreVersionsPanel::setFirmwareStatus(bool known, bool needsUpdate,
+                                          const QString& installed, const QString& latest) {
+    m_blinkTimer->stop();
+    m_needsUpdate = false;
+    if (!known) {
+        m_status->hide();
+        return;
+    }
+
+    m_status->show();
+    m_status->setToolTip(tr("Installed firmware: %1\nLatest firmware: %2").arg(installed, latest));
+    if (needsUpdate) {
+        m_needsUpdate = true;
+        m_blinkOn = true;
+        m_status->setText(tr("Firmware needs an update!"));
+        m_status->setStyleSheet(QStringLiteral("color: #e04040; font-weight: bold;"));
+        m_blinkTimer->start();
+    } else {
+        m_status->setText(tr("Firmware is up to date."));
+        m_status->setStyleSheet(QStringLiteral("color: #2ea043; font-weight: bold;"));
+    }
 }
 
 void CoreVersionsPanel::loadIgnored() {

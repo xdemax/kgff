@@ -201,6 +201,37 @@ GitHub (`git init && git add . && git commit -m init && git push`), открой
 только в файловый verbose-журнал (`--log`), не на экран. `boot` — основа следующего шага,
 более надёжного перехода в BOOTSEL.
 
+## Версия прошивки на GitHub
+
+В дереве `firmware` версия не входит в имя файла: она записана в сообщении последнего коммита
+каждого файла, например `Firmware build 26111813: ...`. `Worker::fetchLatestFirmwareVersion()`
+берёт Atom-ленту истории выбранного файла:
+
+    https://github.com/andykarpov/karabas-go/commits/master/firmware/<file>.atom
+
+и разбирает заголовок регуляркой `Firmware build\s+([0-9]+)`. Если лента недоступна или формат
+не распознан, используется запасной GitHub API
+`/repos/andykarpov/karabas-go/commits?path=firmware/<file>&per_page=20`. Запрос выполняется в
+`doDownload()` при `updateFirmware || updateCores`; результат пишется в журнал как
+`Latest firmware on GitHub (<file>): <build>`, а ошибка запроса не блокирует скачивание.
+
+На старте `Worker::runStartupFirmwareCheck()` проверяет все три файла параллельно: до трёх раундов
+Atom-запросов с таймаутом 5 с, повторяя только неудачные модели. После этого испускается
+`startupFirmwareCheckFinished`, и `MainWindow` запускает обычное автоопределение модели (если
+найден ровно один порт и пользователь не начал другую операцию). В экранный журнал выводится
+одна строка — `Firmware versions fetched.` или `Warning: Firmware version fetch error.`;
+подробности по моделям идут в файловый verbose-журнал. Если проверка не удалась, приложение
+продолжает работу.
+
+`AT+KARABAS=version` даёт установленную сборку прошивки (`m_boardFirmwareVersion`). Если при
+скачивании ядер известны обе версии, `doDownload()` сравнивает их через `compareCoreBuilds()` и
+испускает `firmwareStatusReady(known, needsUpdate, installed, latest)`. Панель
+`CoreVersionsPanel::setFirmwareStatus()` показывает справа вверху:
+- старую прошивку — красным мигающим `Firmware needs an update!` (мигание — `QTimer`, 600 мс);
+- актуальную — зелёным `Firmware is up to date.`;
+- неизвестную — ничего.
+Статус показывается только когда обновляются ядра (`updateCores`).
+
 ## Версия ядра в `.kg`
 
 Скачанные ядра разбираются в `src/CoreFile.cpp` (`parseCoreFile()`). Формат kgo2 описан в
@@ -296,6 +327,9 @@ RP2040 в режиме загрузчика иногда определяетс�
 и без него) и прерывает операцию с сообщением «Another RP2040 board is in BOOTSEL mode».
 
 ## Дополнительный контент (`extra.zip`)
+
+**Сейчас пункт `Download extra content` временно отключён в интерфейсе до доработки архива.**
+Код скачивания/распаковки оставлен для следующего шага.
 
 Архив `extra.zip` скачивается с GitHub и распаковывается встроенной библиотекой `minizip-ng`
 (собирается через `FetchContent`). Внешние архиваторы не используются. При распаковке:
