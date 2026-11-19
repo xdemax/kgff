@@ -497,7 +497,9 @@ void Worker::runDetectModel(const Params& p) {
                      " in the version response. Model was not changed.");
             return;
         }
+        m_boardModelIndex = modelIndex;
         emit log("Detected model: " + models().at(modelIndex).name);
+        emitFirmwareStatus(modelIndex);
         emit modelDetected(modelIndex, raw);
     });
 }
@@ -980,6 +982,15 @@ bool Worker::fetchLatestFirmwareVersion(const QString& firmwareFile, QString* ve
     return false;
 }
 
+void Worker::emitFirmwareStatus(int modelIndex) {
+    if (modelIndex < 0) modelIndex = m_boardModelIndex;
+    const QString latest = m_latestFirmwareVersions.value(modelIndex);
+    const bool known = !m_boardFirmwareVersion.isEmpty() && !latest.isEmpty();
+    const bool needsUpdate = known &&
+        compareCoreBuilds(m_boardFirmwareVersion, latest) < 0;
+    emit firmwareStatusReady(known, needsUpdate, m_boardFirmwareVersion, latest);
+}
+
 // ----------------------------------------------------------------------------
 // Скачивание
 // ----------------------------------------------------------------------------
@@ -1013,7 +1024,7 @@ void Worker::doDownload(const Params& p) {
         QString version;
         QString versionError;
         if (fetchLatestFirmwareVersion(firmwareFile, &version, &versionError)) {
-            m_latestFirmwareVersion = version;
+            m_latestFirmwareVersions.insert(p.modelIndex, version);
             emit log("Latest firmware on GitHub (" + firmwareFile + "): " + version);
         } else if (m_cancel.load()) {
             emit log(QStringLiteral("Operation cancelled by user."));
@@ -1269,14 +1280,7 @@ void Worker::doDownload(const Params& p) {
         emit coreVersionsReady(rows, m.name, installedKnown);
     }
 
-    if (p.updateCores) {
-        QString latest = m_latestFirmwareVersion;
-        if (latest.isEmpty()) latest = m_latestFirmwareVersions.value(p.modelIndex);
-        const bool known = !m_boardFirmwareVersion.isEmpty() && !latest.isEmpty();
-        const bool needsUpdate = known &&
-            compareCoreBuilds(m_boardFirmwareVersion, latest) < 0;
-        emit firmwareStatusReady(known, needsUpdate, m_boardFirmwareVersion, latest);
-    }
+    if (p.updateFirmware || p.updateCores) emitFirmwareStatus(p.modelIndex);
 
     if (okCount == cores.size()) {
         // Маркер полноты набора: прошивка с обновлением ядер без него не запустится
@@ -2089,6 +2093,7 @@ void Worker::doFlash(const Params& p) {
                                 "'Download extra content'."));
         return;
     }
+    m_boardModelIndex = p.modelIndex;
     // Итоговая сводка: собираем статусы по каждой операции, чтобы в конце вывести
     // "firmware=done, cores=done, extra=failed" вместо одного "completed successfully".
     QString fwStatus = p.updateFirmware ? QStringLiteral("pending") : QStringLiteral("skipped");
@@ -2502,6 +2507,37 @@ void Worker::doFlash(const Params& p) {
             emit log("Flash write error: " + err);
         }
     }
+
+    // После успешной записи плата перезапускается. Заново спрашиваем версию,
+    // иначе в панели остаётся старый статус "Firmware needs an update!".
+    if (p.updateFirmware && fwStatus.startsWith(QLatin1String("done"))) {
+        bool gotVersion = false;
+        if (!p.portLocation.isEmpty()) {
+            emit logVerbose(QStringLiteral("Waiting for the device to restart..."));
+            QString raw;
+            QString firmware;
+            int board = 0;
+            for (int i = 0; i < 30 && !m_cancel.load() && !gotVersion; ++i) {
+                if (i > 0 && !pause(500)) break;
+                if (!isPortPresent(p.portLocation)) continue;
+                // queryVersion сам делает несколько попыток; повторять его
+                // в цикле ожидания не нужно.
+                gotVersion = queryVersion(p.portLocation, &raw, &board, &firmware);
+                break;
+            }
+            if (gotVersion) {
+                m_boardFirmwareVersion = firmware;
+                m_boardModelIndex = p.modelIndex;
+                emit logVerbose(QStringLiteral("Firmware version after update: ") + firmware);
+            }
+        }
+        if (!gotVersion) {
+            // Не показываем заведомо устаревшую версию после прошивки.
+            m_boardFirmwareVersion.clear();
+            emit logVerbose(QStringLiteral("Could not confirm the firmware version after update."));
+        }
+    }
+    if (p.updateFirmware || p.updateCores) emitFirmwareStatus(p.modelIndex);
     finish();
 
     // Eject после прошивки не нужен: RP2040 перезагружается сам сразу после записи

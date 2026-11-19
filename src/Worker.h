@@ -126,6 +126,8 @@ private:
     bool queryCoreList(const QString& portLocation, int board, QList<CoreFileInfo>* out);
     // Актуальная сборка прошивки из истории каталога firmware на GitHub.
     bool fetchLatestFirmwareVersion(const QString& firmwareFile, QString* version, QString* error);
+    // Сравнить известную версию платы с последней на GitHub и обновить панель.
+    void emitFirmwareStatus(int modelIndex = -1);
     bool resetPortToBootloader(const QString& portLocation);
     bool isPortPresent(const QString& portLocation);
     // Реальная проба: открыть порт и сразу закрыть, ничего не записывая.
@@ -182,8 +184,8 @@ private:
     int m_deviceCoresBoard = 0;
     bool m_deviceCoresValid = false;
     QHash<int, QString> m_latestFirmwareVersions;   // model index -> build
-    QString m_latestFirmwareVersion;
     QString m_boardFirmwareVersion;                 // build из AT+KARABAS=version
+    int m_boardModelIndex = -1;                     // модель, к которой относится build
 
     std::atomic<bool> m_cancel{false};
     bool m_permissionDenied = false;                    // только рабочий поток
