@@ -10,6 +10,7 @@ class QButtonGroup;
 class QCheckBox;
 class CoreVersionsPanel;
 class QComboBox;
+class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QProcess;
@@ -42,6 +43,7 @@ private slots:
     void onCoreVersionsReady(const QVariantList& rows, const QString& boardName, bool installedKnown);
     void onFirmwareStatusReady(bool known, bool needsUpdate,
                                const QString& installed, const QString& latest);
+    void onAppUpdateAvailable(const QString& version, const QString& url);
     void onFirmwareReady(const QString& path);
     void onWorkerFinished();
     void onPortAccessDenied(const QString& portLocation);
@@ -62,6 +64,7 @@ private:
     void hideCorePanel();
     void centerWindowForWidth(int outerWidth);
 
+    QLabel* m_appUpdateLabel = nullptr;    // ссылка на новый релиз флешера
     QComboBox* m_modelCombo = nullptr;
     QPushButton* m_detectBtn = nullptr;    // кнопка-лупа: автоопределение модели
     QPushButton* m_downloadBtn = nullptr;

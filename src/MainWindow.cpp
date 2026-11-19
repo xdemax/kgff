@@ -53,7 +53,20 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     auto* root = new QVBoxLayout(left);
     root->setContentsMargins(0, 0, 0, 0);
 
-    root->addWidget(new QLabel(tr("Select Device Model:")));
+    m_appUpdateLabel = new QLabel;
+    m_appUpdateLabel->setTextFormat(Qt::RichText);
+    m_appUpdateLabel->setOpenExternalLinks(true);
+    m_appUpdateLabel->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    m_appUpdateLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_appUpdateLabel->setVisible(false);
+
+    // Уведомление об обновлении — на одной строке с "Select Device Model:",
+    // справа, над кнопкой Download via GitHub.
+    auto* modelHeader = new QHBoxLayout;
+    modelHeader->addWidget(new QLabel(tr("Select Device Model:")));
+    modelHeader->addStretch();
+    modelHeader->addWidget(m_appUpdateLabel, 0, Qt::AlignRight | Qt::AlignVCenter);
+    root->addLayout(modelHeader);
     auto* row1 = new QHBoxLayout;
     m_modelCombo = new QComboBox;
     m_modelCombo->setMinimumHeight(28);
@@ -221,6 +234,7 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     connect(m_worker, &Worker::firmwareReady, this, &MainWindow::onFirmwareReady);
     connect(m_worker, &Worker::coreVersionsReady, this, &MainWindow::onCoreVersionsReady);
     connect(m_worker, &Worker::firmwareStatusReady, this, &MainWindow::onFirmwareStatusReady);
+    connect(m_worker, &Worker::appUpdateAvailable, this, &MainWindow::onAppUpdateAvailable);
     connect(m_worker, &Worker::startupFirmwareCheckFinished, this,
             &MainWindow::onStartupFirmwareCheckFinished);
     connect(m_worker, &Worker::finished, this, &MainWindow::onWorkerFinished);
@@ -596,6 +610,20 @@ void MainWindow::onFirmwareStatusReady(bool known, bool needsUpdate,
                                   needsUpdate ? QStringLiteral("update needed")
                                               : QStringLiteral("up to date")));
     }
+}
+
+void MainWindow::onAppUpdateAvailable(const QString& version, const QString& url) {
+    if (version.isEmpty() || url.isEmpty()) {
+        m_appUpdateLabel->hide();
+        return;
+    }
+    const QString text = tr("New flasher version available");
+    m_appUpdateLabel->setText(
+        QStringLiteral("<a href=\"%1\" style=\"color:#e04040; font-weight:bold;\">%2</a>")
+            .arg(url.toHtmlEscaped(), text.toHtmlEscaped()));
+    m_appUpdateLabel->setToolTip(tr("Latest version: %1").arg(version));
+    m_appUpdateLabel->show();
+    appendLogVerbose(QStringLiteral("New Karabas Flasher version available: %1 (%2)").arg(version, url));
 }
 
 void MainWindow::showCorePanel() {

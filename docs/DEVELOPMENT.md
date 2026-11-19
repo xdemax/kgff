@@ -17,7 +17,7 @@
 Готовый пакет лежит в разделе Releases на GitHub (для Ubuntu 24.04 и новее). `apt` сам доставит все
 зависимости (Qt 6, udisks2 и т.д.) и установит правило доступа к порту:
 
-    sudo apt install ./karabas-flasher_1.2.2_amd64_ubuntu24.04.deb
+    sudo apt install ./karabas-flasher_1.3.0_amd64_ubuntu24.04.deb
 
 **Ubuntu 22.04 и старше:** в их репозиториях нет Qt SerialPort (`libqt6serialport6`), поэтому `.deb` не подойдёт - 
 используйте AppImage (Qt внутри). На Debian 12 `.deb` не проверялся: он собран на Ubuntu 24.04 и может требовать более новую glibc.
@@ -28,8 +28,8 @@
 
 **AppImage (любой дистрибутив).** В релизе есть один файл `KarabasFlasher-<версия>-x86_64.AppImage` с Qt внутри:
 
-    chmod +x KarabasFlasher-1.2.2-x86_64.AppImage
-    ./KarabasFlasher-1.2.2-x86_64.AppImage
+    chmod +x KarabasFlasher-1.3.0-x86_64.AppImage
+    ./KarabasFlasher-1.3.0-x86_64.AppImage
 
 На некоторых системах нужен пакет `libfuse2` (иначе: `./KarabasFlasher-...AppImage --appimage-extract-and-run`).
 Системные части (udisks2, polkit, systemd) должны быть установлены - на обычном рабочем столе они уже есть.
@@ -109,7 +109,7 @@ LGPL-3.0 (подключается динамически; подробност�
 Оттуда она попадает в заголовок окна, в журнал (вместе с описанием из git, например `v0.1.0-3-gabc1234`),
 в `--version` и в версию macOS-приложения. Схема `MAJOR.MINOR.PATCH`: исправление ошибки - PATCH,
 новая возможность - MINOR, несовместимое изменение - MAJOR. Все три системы проверены на железе,
-поэтому используются версии `1.x` (текущая - `1.2.2`).
+поэтому используются версии `1.x` (текущая - `1.3.0`).
 
 Как выпустить версию:
 
@@ -200,6 +200,19 @@ GitHub (`git init && git add . && git commit -m init && git push`), открой
 `parseCoreListResponse()`: список используется для сравнения версий, а подробный вывод идёт
 только в файловый verbose-журнал (`--log`), не на экран. `boot` — основа следующего шага,
 более надёжного перехода в BOOTSEL.
+
+## Проверка обновления флешера
+
+`Worker::checkFlasherUpdate()` запрашивает
+`https://api.github.com/repos/xdemax/kgff/releases/latest` с таймаутом 5 с. `tag_name`
+сравнивается с `APP_VERSION` через `versionIsNewer()`, причём префикс `v` и компоненты
+`MAJOR.MINOR.PATCH` учитываются. Если релиз новее, испускается
+`appUpdateAvailable(tag, html_url)`. `MainWindow::onAppUpdateAvailable()` показывает красную
+кликабельную надпись `New flasher version available` в главном окне над кнопкой
+`Download via GitHub`; `QLabel` с `openExternalLinks` открывает страницу релиза в браузере.
+Панель ядер при этом не раскрывается.
+Проверка выполняется после успешной стартовой проверки версий прошивки; ошибки только пишутся
+в verbose-журнал и не мешают работе.
 
 ## Версия прошивки на GitHub
 

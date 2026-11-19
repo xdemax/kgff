@@ -72,6 +72,8 @@ signals:
     // Статус прошивки для панели ядер: known=false — версия неизвестна.
     void firmwareStatusReady(bool known, bool needsUpdate,
                              const QString& installed, const QString& latest);
+    // Доступна более новая версия самого флешера.
+    void appUpdateAvailable(const QString& version, const QString& url);
     void portsChanged();                                // список портов мог измениться (MSC, сброс)
     // Запрос подтверждения записи на диск без признаков Карабаса. Отправляется из
     // рабочего потока через Qt::BlockingQueuedConnection: GUI показывает диалог и
@@ -101,7 +103,8 @@ private:
     void guarded(const std::function<void()>& fn);
     bool pause(int ms);                                 // false, если запрошена отмена
 
-    HttpResult httpFetch(const QUrl& url, qint64 maxBytes, QSaveFile* file);
+    HttpResult httpFetch(const QUrl& url, qint64 maxBytes, QSaveFile* file,
+                         int transferTimeoutMs = 20000);
     bool downloadToFile(const QUrl& url, const QString& dest, QString* err,
                         qint64 maxBytes = 64 * 1024 * 1024);
     // Параллельная загрузка нескольких файлов через ОДИН QNetworkAccessManager
@@ -128,6 +131,8 @@ private:
     bool fetchLatestFirmwareVersion(const QString& firmwareFile, QString* version, QString* error);
     // Сравнить известную версию платы с последней на GitHub и обновить панель.
     void emitFirmwareStatus(int modelIndex = -1);
+    // Проверка последнего релиза самого Karabas Flasher.
+    void checkFlasherUpdate();
     bool resetPortToBootloader(const QString& portLocation);
     bool isPortPresent(const QString& portLocation);
     // Реальная проба: открыть порт и сразу закрыть, ничего не записывая.

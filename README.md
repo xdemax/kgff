@@ -17,6 +17,7 @@
 
 - **Скачивает** актуальные прошивки и ядра из репозитория автора плат на GitHub (`karabas-go`).
 - **Проверяет актуальную сборку прошивки** по последнему коммиту выбранного файла в каталоге `firmware` на GitHub: при запуске для всех моделей и перед скачиванием прошивки или ядер. Если обновляются ядра, панель показывает состояние прошивки платы: мигающее красное `Firmware needs an update!` или зелёное `Firmware is up to date.` После прошивки статус пересчитывается: версия запрашивается у платы заново.
+- **Проверяет обновление самого флешера** через GitHub Releases. Если доступна новая версия, над кнопкой `Download via GitHub` появляется красная ссылка `New flasher version available`; клик открывает страницу последнего релиза в браузере.
 - **Обновляет прошивку** платы (микроконтроллер RP2040).
 - **Заменяет ядра** (файлы `.kg`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
 - **Читает версии ядер** из заголовков `.kg` (kgo2) для выбранной модели платы и использует их для сравнения; подробный список пишется в файловый журнал при `--log`.
@@ -184,6 +185,7 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 
 - **Downloads** the latest firmware and cores from the board author's GitHub repository (`karabas-go`).
 - **Checks the current firmware build** from the latest commit of the selected file in the GitHub `firmware` directory: for all models at startup and before downloading firmware or cores. When cores are updated, the panel shows the board firmware state: a blinking red `Firmware needs an update!` or a green `Firmware is up to date.` After flashing, the status is recalculated: the board firmware version is requested again.
+- **Checks for flasher updates** through GitHub Releases. If a newer version is available, a red `New flasher version available` link appears above the `Download via GitHub` button; clicking it opens the latest release page in the browser.
 - **Copies extra content** (ROMs, disk images, etc.) from the `extra.zip` archive to the SD card. Files that already exist on the card are replaced; other user files are left untouched. Free space is checked before copying, and the unpacked archive size is checked before extraction (2 GB limit). Symbolic links from the archive are not copied. **This feature is temporarily disabled in the UI.**
 - **Updates the board firmware** (RP2040 microcontroller).
 - **Replaces cores** (`.kg` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.

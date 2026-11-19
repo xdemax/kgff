@@ -3,6 +3,7 @@
 #include "CoreFile.h"
 #include "Uf2.h"
 #include "Util.h"
+#include "Version.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -66,6 +67,34 @@ QString firmwareAtomUrlForFile(const QString& file) {
     return kFirmwareAtomBase +
            QString::fromLatin1(QUrl::toPercentEncoding(name)) +
            QStringLiteral(".atom");
+}
+
+// true, если latest строго новее current. Понимает префикс "v" и числа через точку.
+bool versionIsNewer(const QString& latest, const QString& current) {
+    auto parse = [](const QString& value) {
+        QString text = value.trimmed();
+        if (text.startsWith(QLatin1Char('v'), Qt::CaseInsensitive)) text.remove(0, 1);
+        const QStringList parts = text.split(QLatin1Char('.'));
+        QList<int> numbers;
+        for (const QString& part : parts) {
+            bool ok = false;
+            const int number = part.toInt(&ok);
+            if (!ok) return QList<int>();
+            numbers << number;
+        }
+        return numbers;
+    };
+
+    const QList<int> latestNumbers = parse(latest);
+    const QList<int> currentNumbers = parse(current);
+    if (latestNumbers.isEmpty() || currentNumbers.isEmpty()) return false;
+    const int count = qMax(latestNumbers.size(), currentNumbers.size());
+    for (int i = 0; i < count; ++i) {
+        const int a = i < latestNumbers.size() ? latestNumbers.at(i) : 0;
+        const int b = i < currentNumbers.size() ? currentNumbers.at(i) : 0;
+        if (a != b) return a > b;
+    }
+    return false;
 }
 
 QNetworkRequest makeRequest(const QUrl& url, int transferTimeoutMs = 20000) {
@@ -590,6 +619,8 @@ void Worker::runStartupFirmwareCheck() {
     }
     emit log(allOk ? QStringLiteral("Firmware versions fetched.")
                    : QStringLiteral("Warning: Firmware version fetch error."));
+    // Проверку обновления флешера делаем только когда сеть уже ответила.
+    if (allOk) checkFlasherUpdate();
     emit startupFirmwareCheckFinished();
 }
 
@@ -644,10 +675,11 @@ void Worker::doOpenSd(const Params& p) {
 // ----------------------------------------------------------------------------
 // Сеть (QNetworkAccessManager, синхронно внутри рабочего потока)
 // ----------------------------------------------------------------------------
-Worker::HttpResult Worker::httpFetch(const QUrl& url, qint64 maxBytes, QSaveFile* file) {
+Worker::HttpResult Worker::httpFetch(const QUrl& url, qint64 maxBytes, QSaveFile* file,
+                                     int transferTimeoutMs) {
     HttpResult r;
     QNetworkAccessManager nam;
-    const QNetworkRequest req = makeRequest(url);
+    const QNetworkRequest req = makeRequest(url, transferTimeoutMs);
 
     QNetworkReply* reply = nam.get(req);   // reply принадлежит nam и удалится вместе с ним
 
@@ -989,6 +1021,37 @@ void Worker::emitFirmwareStatus(int modelIndex) {
     const bool needsUpdate = known &&
         compareCoreBuilds(m_boardFirmwareVersion, latest) < 0;
     emit firmwareStatusReady(known, needsUpdate, m_boardFirmwareVersion, latest);
+}
+
+void Worker::checkFlasherUpdate() {
+    const HttpResult result = httpFetch(
+        QUrl(QStringLiteral("https://api.github.com/repos/xdemax/kgff/releases/latest")),
+        kMaxTextBytes, nullptr, 5000);
+    if (!result.ok) {
+        emit logVerbose(QStringLiteral("Flasher update check failed: ") + result.error);
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(result.body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        emit logVerbose(QStringLiteral("Flasher update check: invalid GitHub response."));
+        return;
+    }
+    const QJsonObject release = doc.object();
+    const QString tag = release.value(QStringLiteral("tag_name")).toString();
+    const QString url = release.value(QStringLiteral("html_url")).toString();
+    if (tag.isEmpty() || url.isEmpty()) {
+        emit logVerbose(QStringLiteral("Flasher update check: no release information."));
+        return;
+    }
+
+    if (versionIsNewer(tag, QString::fromLatin1(APP_VERSION))) {
+        emit logVerbose(QStringLiteral("New Karabas Flasher version available: ") + tag);
+        emit appUpdateAvailable(tag, url);
+    } else {
+        emit logVerbose(QStringLiteral("Karabas Flasher is up to date (latest ") + tag + QLatin1Char(')'));
+    }
 }
 
 // ----------------------------------------------------------------------------
