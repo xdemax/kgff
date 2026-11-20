@@ -125,6 +125,12 @@ target_link_libraries(KarabasFlasher PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::SerialPort
     minizip)
 
+if(WIN32)
+    # SetupAPI используется для определения control/core serial COM-порта
+    # по USB composite interface (MI_00/MI_02).
+    target_link_libraries(KarabasFlasher PRIVATE setupapi advapi32 uuid)
+endif()
+
 # Иконка приложения для exe (Windows) и .app-бандла (macOS).
 # Linux использует resources/krb.png через install() ниже.
 # Файлы иконок подключаются только если они есть в репозитории.

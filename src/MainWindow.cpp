@@ -18,6 +18,7 @@
 #include <QGridLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QHash>
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
@@ -40,6 +41,12 @@
 #include <QCursor>
 #include <QVBoxLayout>
 
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#include <setupapi.h>
+#include <devguid.h>
+#endif
+
 #include <algorithm>
 
 namespace {
@@ -54,7 +61,53 @@ enum class KarabasPortRole {
 // На Windows описание COM-порта локализовано и часто одинаково у обоих
 // интерфейсов ("USB Serial Device"). Роль определяем по USB composite
 // interface: MI_00 — control, MI_02 — core serial.
+//
+// Основной путь — SetupAPI: он даёт device instance id и связанное значение
+// PortName даже при локализованном описании. Реестр ниже оставлен запасным.
+QHash<QString, KarabasPortRole> windowsPortRolesSetupApi() {
+    QHash<QString, KarabasPortRole> roles;
+    HDEVINFO devices = SetupDiGetClassDevsW(&GUID_DEVCLASS_PORTS, nullptr, nullptr, DIGCF_PRESENT);
+    if (devices == INVALID_HANDLE_VALUE) return roles;
+
+    SP_DEVINFO_DATA data;
+    data.cbSize = sizeof(data);
+    for (DWORD index = 0; SetupDiEnumDeviceInfo(devices, index, &data); ++index) {
+        wchar_t instanceId[512];
+        if (!SetupDiGetDeviceInstanceIdW(devices, &data, instanceId,
+                                         static_cast<DWORD>(sizeof(instanceId) / sizeof(instanceId[0])),
+                                         nullptr)) {
+            continue;
+        }
+        const QString id = QString::fromWCharArray(instanceId);
+        if (!id.contains(QStringLiteral("VID_2E8A&PID_000A"), Qt::CaseInsensitive)) continue;
+
+        const bool control = id.contains(QStringLiteral("&MI_00"), Qt::CaseInsensitive);
+        const bool coreSerial = id.contains(QStringLiteral("&MI_02"), Qt::CaseInsensitive);
+        if (!control && !coreSerial) continue;
+
+        HKEY key = SetupDiOpenDevRegKey(devices, &data, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ);
+        if (key == INVALID_HANDLE_VALUE) continue;
+        wchar_t portName[64] = {};
+        DWORD size = sizeof(portName);
+        DWORD type = 0;
+        const LONG result = RegQueryValueExW(key, L"PortName", nullptr, &type,
+                                             reinterpret_cast<LPBYTE>(portName), &size);
+        RegCloseKey(key);
+        if (result != ERROR_SUCCESS || type != REG_SZ) continue;
+
+        const QString port = QString::fromWCharArray(portName).trimmed();
+        if (port.isEmpty()) continue;
+        roles.insert(port, control ? KarabasPortRole::Control : KarabasPortRole::CoreSerial);
+    }
+    SetupDiDestroyDeviceInfoList(devices);
+    return roles;
+}
+
 KarabasPortRole windowsPortRole(const QString& portName) {
+    const QHash<QString, KarabasPortRole> setupRoles = windowsPortRolesSetupApi();
+    const auto setupIt = setupRoles.constFind(portName);
+    if (setupIt != setupRoles.constEnd()) return setupIt.value();
+
     QSettings usb(QStringLiteral("HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\USB"),
                   QSettings::Registry64Format);
     const QStringList devices = usb.childGroups();
