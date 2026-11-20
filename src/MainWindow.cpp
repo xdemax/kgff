@@ -14,6 +14,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QGridLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -38,6 +39,64 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+
+namespace {
+
+enum class KarabasPortRole {
+    Unknown,
+    Control,        // interface 0: log, DIAG, AT+KARABAS
+    CoreSerial,     // interface 2: UART of the core
+};
+
+// С прошивки 2026-11-19 у платы два CDC-порта. Для флешера нужен control
+// (interface 0), core serial (interface 2) — это чистый UART ядра.
+KarabasPortRole karabasPortRole(const QSerialPortInfo& info) {
+    if (!info.hasVendorIdentifier() || !info.hasProductIdentifier() ||
+        info.vendorIdentifier() != 0x2e8a || info.productIdentifier() != 0x000a) {
+        return KarabasPortRole::Unknown;
+    }
+
+#if defined(Q_OS_LINUX)
+    // Самый надёжный признак: номер интерфейса в sysfs.
+    QFile number(QStringLiteral("/sys/class/tty/%1/device/bInterfaceNumber").arg(info.portName()));
+    if (number.open(QIODevice::ReadOnly)) {
+        const QString value = QString::fromLatin1(number.readAll()).trimmed();
+        if (value == QLatin1String("00")) return KarabasPortRole::Control;
+        if (value == QLatin1String("02")) return KarabasPortRole::CoreSerial;
+    }
+    // Запасной вариант — стабильные имена /dev/serial/by-id/*-if00 / *-if02.
+    const QString target = QFileInfo(info.systemLocation()).canonicalFilePath();
+    if (!target.isEmpty()) {
+        const QFileInfoList links = QDir(QStringLiteral("/dev/serial/by-id"))
+            .entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::System);
+        for (const QFileInfo& link : links) {
+            if (link.canonicalFilePath() != target) continue;
+            if (link.fileName().endsWith(QLatin1String("-if00"))) return KarabasPortRole::Control;
+            if (link.fileName().endsWith(QLatin1String("-if02"))) return KarabasPortRole::CoreSerial;
+        }
+    }
+#endif
+
+    const QString description = info.description();
+    if (description.contains(QStringLiteral("core serial"), Qt::CaseInsensitive)) {
+        return KarabasPortRole::CoreSerial;
+    }
+    if (description.contains(QStringLiteral("control"), Qt::CaseInsensitive)) {
+        return KarabasPortRole::Control;
+    }
+
+#if defined(Q_OS_MACOS)
+    // На macOS control — /dev/cu.usbmodem<serial>1, core — ...3.
+    const QString location = info.systemLocation();
+    if (location.endsWith(QLatin1Char('1'))) return KarabasPortRole::Control;
+    if (location.endsWith(QLatin1Char('3'))) return KarabasPortRole::CoreSerial;
+#endif
+
+    // Старая прошивка с одним портом или control без отдельного имени.
+    return KarabasPortRole::Control;
+}
+
+}  // namespace
 
 MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_fileLogging(fileLogging) {
     setWindowTitle(QStringLiteral("Karabas Go Family Firmware Flasher v") + QString::fromLatin1(APP_VERSION));
@@ -283,9 +342,9 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     onRefreshPorts();
     appendLog(QStringLiteral("Application is ready."));
     // Первым делом — версии прошивки для всех моделей на GitHub. После неё
-    // запускаем обычный автодетект модели (если найден ровно один USB-порт).
+    // запускаем обычный автодетект модели, если выбран control-порт.
     // Обе задачи идут в рабочем потоке и не блокируют GUI.
-    m_startupAutoDetectPending = (m_comCombo->count() == 2);   // 0 - "(not selected)"
+    m_startupAutoDetectPending = !m_comCombo->currentData().toString().isEmpty();
     QMetaObject::invokeMethod(this, &MainWindow::onStartupFirmwareCheck, Qt::QueuedConnection);
 }
 
@@ -527,6 +586,9 @@ void MainWindow::onRefreshPorts() {
         return a.systemLocation() < b.systemLocation();
     });
     int added = 0;
+    int controlCount = 0;
+    int controlIndex = -1;
+    int coreSerialCount = 0;
     for (const QSerialPortInfo& info : ports) {
 #if defined(Q_OS_MACOS)
         if (info.systemLocation().startsWith(QStringLiteral("/dev/tty."))) continue;   // оставляем /dev/cu.*
@@ -543,13 +605,23 @@ void MainWindow::onRefreshPorts() {
         QString text = info.systemLocation();
         const QString location = info.systemLocation();
 #endif
+        const KarabasPortRole role = karabasPortRole(info);
         if (!info.description().isEmpty()) text += " (" + info.description() + ")";
+        if (role == KarabasPortRole::Control) text += QStringLiteral(" [control]");
+        else if (role == KarabasPortRole::CoreSerial) text += QStringLiteral(" [core serial]");
         if (info.hasVendorIdentifier() && info.hasProductIdentifier()) {
             text += QStringLiteral(" [%1:%2]")
                         .arg(info.vendorIdentifier(), 4, 16, QLatin1Char('0'))
                         .arg(info.productIdentifier(), 4, 16, QLatin1Char('0'));
         }
+        const int itemIndex = m_comCombo->count();
         m_comCombo->addItem(text, location);
+        if (role == KarabasPortRole::Control) {
+            ++controlCount;
+            controlIndex = itemIndex;
+        } else if (role == KarabasPortRole::CoreSerial) {
+            ++coreSerialCount;
+        }
         appendLog("Found port: " + text);
         ++added;
     }
@@ -557,13 +629,30 @@ void MainWindow::onRefreshPorts() {
         appendLog(QStringLiteral("Error: Active serial ports not found. Connect the Karabas by USB "
                                  "and press 'Refresh ports'."));
     }
-    // Не выбираем порт автоматически, если USB-портов больше одного: можно случайно
-    // отправить команду MSC или 1200 bps на чужое устройство (Arduino и т.п.).
-    m_comCombo->setCurrentIndex(added == 1 ? 1 : 0);
-    if (added > 1) {
-        appendLog(QStringLiteral("Warning: More than one USB serial port found. Select the Karabas port "
-                                 "manually."));
+
+    // Явно выбираем control-порт новой прошивки: у платы теперь два CDC-порта,
+    // и core serial для AT-команд не подходит.
+    int selectedIndex = 0;
+    if (controlCount == 1) {
+        selectedIndex = controlIndex;
+        appendLog("Selected Karabas control port: " + m_comCombo->itemText(controlIndex));
+    } else if (controlCount > 1) {
+        appendLog(QStringLiteral("Warning: More than one Karabas control port found. Select the required "
+                                 "board manually."));
+    } else if (added == 1 && coreSerialCount == 0) {
+        selectedIndex = 1;      // единственный USB-порт (старая прошивка или другое устройство)
+    } else if (coreSerialCount > 0) {
+        appendLog(QStringLiteral("Warning: Only the Karabas core serial port was found. The control port is "
+                                 "needed for flashing; reconnect the board and press 'Refresh ports'."));
+    } else if (added > 1) {
+        appendLog(QStringLiteral("Warning: More than one USB serial port found. Select the Karabas control "
+                                 "port manually."));
     }
+    if (coreSerialCount > 0 && controlCount > 0) {
+        appendLog(QStringLiteral("Karabas core serial port is for the core UART only and is not used for "
+                                 "flashing."));
+    }
+    m_comCombo->setCurrentIndex(selectedIndex);
     updateActionState();
 }
 

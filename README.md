@@ -52,7 +52,9 @@
    копируются только отмеченные ядра.
 5. В списке **Serial port** выберите порт платы. В списке показываются только USB-устройства; нужный порт появляется,
    когда плата подключена (если его нет, нажмите **Refresh ports**). Пункт «(not selected - flash without reset)» нужен,
-   только если плата уже переведена в режим загрузчика вручную.
+   только если плата уже переведена в режим загрузчика вручную. Начиная с прошивки 26111914 плата показывает **два**
+   USB-порта: `[control]` (interface 0 — лог и `AT+KARABAS=...`) и `[core serial]` (interface 2 — только UART ядра).
+   Флешер сам выбирает `[control]`; для прошивки нужен именно он.
 6. Нажмите **FLASH!** и дождитесь в журнале строки «Process completed successfully».
 
 Во время работы не отключайте плату и не закрывайте окно. Если окно всё же закрыть, программа спросит подтверждение и остановится в безопасный момент.
@@ -75,6 +77,21 @@ Atom-лентам коммитов на GitHub (до трёх попыток). �
 `3` — Karabas Go Mini rev G. Затем программа сразу запрашивает `AT+KARABAS=list` и выводит ядра
 с карты в журнал. Полученный ответ `version` выводится в журнал, а в списке моделей автоматически
 выбирается нужная.
+
+### Два USB-порта (прошивка 26111914)
+
+С 19.11.2026 (сборка 26111914) плата показывает два USB-последовательных порта:
+
+| Порт | Linux | Назначение |
+|---|---|---|
+| `control` (interface 0) | `/dev/serial/by-id/usb-Karabas_Go_<serial>-if00` | журнал, DIAG и команды `AT+KARABAS=...`; **этот порт нужен флешеру** |
+| `core serial` (interface 2) | `/dev/serial/by-id/usb-Karabas_Go_<serial>-if02` | только UART ядра, без AT-команд и лога |
+
+На macOS это `/dev/cu.usbmodem<serial>1` (control) и `...3` (core serial); в Windows — два COM-порта, второй
+называется `Karabas core serial`. Сброс 1200 бод в режим загрузчика работает только на control-порту.
+
+Флешер сам выбирает `[control]`, а в списке портов подписывает `[control]` и `[core serial]`. Порт
+`core serial` для прошивки не используется.
 
 ### Работа с SD-картой вручную
 
@@ -220,7 +237,9 @@ Firmware and cores can be updated together or separately — for example, cores 
    with **`>>`**. Only checked cores are copied to the card.
 5. In the **Serial port** list, select the board's port. Only USB devices are shown; the required port appears
    when the board is connected (if it is missing, click **Refresh ports**). The "(not selected - flash without reset)"
-   item is only needed if the board has already been put into bootloader mode manually.
+   item is only needed if the board has already been put into bootloader mode manually. Starting with firmware 26111914
+   the board shows **two** USB ports: `[control]` (interface 0 — the log and `AT+KARABAS=...`) and `[core serial]`
+   (interface 2 — the core UART only). The flasher selects `[control]` automatically; this is the port needed for flashing.
 6. Click **FLASH!** and wait for the "Process completed successfully" line in the log.
 
 Do not disconnect the board or close the window while an operation is in progress. If you do close the window,
@@ -246,6 +265,21 @@ The `version` reply is written to the log, and the matching model is selected in
 On Windows the program raises the DTR/RTS lines explicitly after opening the port: the RP2040 USB-CDC device
 only transmits data when DTR is asserted, as with a terminal. Without this the board does not answer the
 version request.
+
+### Two USB ports (firmware 26111914)
+
+Since 19.11.2026 (build 26111914) the board shows two USB serial ports:
+
+| Port | Linux | Purpose |
+|---|---|---|
+| `control` (interface 0) | `/dev/serial/by-id/usb-Karabas_Go_<serial>-if00` | the log, DIAG and `AT+KARABAS=...` commands; **the flasher needs this port** |
+| `core serial` (interface 2) | `/dev/serial/by-id/usb-Karabas_Go_<serial>-if02` | the core UART only, no AT commands and no log |
+
+On macOS these are `/dev/cu.usbmodem<serial>1` (control) and `...3` (core serial); on Windows there are two COM ports,
+the second one is named `Karabas core serial`. The 1200 baud reset into bootloader works on the control port only.
+
+The flasher selects `[control]` automatically and marks the ports as `[control]` and `[core serial]` in the list.
+The `core serial` port is not used for flashing.
 
 ### Working with the SD card manually
 

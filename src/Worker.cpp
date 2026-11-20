@@ -1530,12 +1530,13 @@ bool Worker::sendMscCommand(const QString& portLocation, int mscMode) {
     const AtReply reply = parseAtLines(resp);
     const QString text = QString::fromUtf8(resp).trimmed();
     if (reply.hasError) {
-        emit log("Error: The device rejected the MSC command: " + text +
-                 ". Check that the firmware supports this command and the MSC mode number.");
+        emit log(QStringLiteral("Error: The device rejected the MSC command. Check that the firmware "
+                                "supports this command and the MSC mode number."));
+        emit logVerbose(QStringLiteral("Device response: ") + text);
         return false;
     }
     if (!text.isEmpty()) {
-        emit log("Device response: " + text);
+        emit logVerbose(QStringLiteral("Device response: ") + text);
     }
     emit log(QStringLiteral("Command sent successfully. Waiting for device reboot into MSC..."));
     return true;
@@ -1573,14 +1574,16 @@ bool Worker::queryVersion(const QString& portLocation, QString* raw, int* board,
     // Цикл выше выходит и по успеху (+KARABAS:), и по отдельной строке ERROR, поэтому
     // проверяем оба условия явно: успех имеет приоритет над ошибкой.
     if (!reply.hasKarabas && reply.hasError) {
-        emit log("Error: The device rejected the version command: " + text);
+        emit log(QStringLiteral("Error: The device rejected the version command."));
+        emit logVerbose(QStringLiteral("Device response: ") + text);
         return false;
     }
 
     static const QRegularExpression re(QStringLiteral("\\+KARABAS:([^;\\r\\n]*);(\\d+);([^;\\r\\n]*);([^\\r\\n]*)"));
     const QRegularExpressionMatch m = re.match(text);
     if (!m.hasMatch()) {
-        emit log("Error: Unexpected version response: " + text);
+        emit log(QStringLiteral("Error: Unexpected version response."));
+        emit logVerbose(QStringLiteral("Device response: ") + text);
         return false;
     }
     if (raw) *raw = m.captured(0).trimmed();
