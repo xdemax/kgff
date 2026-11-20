@@ -253,7 +253,7 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     root->addLayout(row1);
 
     m_fwChk = new QCheckBox(tr("Update firmware"));
-    m_fwChk->setChecked(true);
+    m_fwChk->setChecked(false);
     m_fwChk->setToolTip(tr("Download and flash the RP2040 firmware of the board."));
     m_extraChk = new QCheckBox(tr("Download extra content (disabled)"));
     m_extraChk->setChecked(false);

@@ -39,7 +39,7 @@
 2. Выберите свою модель в списке **Select Device Model** или нажмите кнопку с лупой — программа сама
    спросит у платы версию (`AT+KARABAS=version`) и выберет нужную модель.
 3. Отметьте, что нужно обновить:
-   - **Update firmware**: прошивка платы (включено по умолчанию);
+   - **Update firmware**: прошивка платы (по умолчанию не выбрана);
    - **Update cores**: ядра на SD-карте;
    - **Download extra content**: дополнительный контент (ROM-ы, образы дисков и т.п.).
 
@@ -235,7 +235,7 @@ Firmware and cores can be updated together or separately — for example, cores 
 2. Select your model in the **Select Device Model** list, or click the magnifier button — the program will
    query the board version (`AT+KARABAS=version`) and pick the right model automatically.
 3. Check what you want to update:
-   - **Update firmware**: board firmware (enabled by default);
+   - **Update firmware**: board firmware (not selected by default);
    - **Update cores**: cores on the SD card;
    - **Download extra content**: extra content (ROMs, disk images, etc.).
 
