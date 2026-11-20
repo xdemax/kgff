@@ -391,12 +391,16 @@ void CoreVersionsPanel::updateRowAppearance(int row) {
 
     QSignalBlocker blocker(m_table);
     if (blocked) {
+        const QString detail = data.value(QStringLiteral("detail")).toString();
+        const bool downloadFailed =
+            detail.startsWith(QStringLiteral("header download failed:"), Qt::CaseInsensitive);
         const QString original = notSupported
             ? QStringLiteral("> ") + tr("not supported for your Karabas")
-            : QStringLiteral("> ") + tr("cannot read the downloaded core header: %1")
-                  .arg(data.value(QStringLiteral("detail")).toString());
+            : (downloadFailed
+                   ? QStringLiteral("> ") + tr("failed to get core version")
+                   : QStringLiteral("> ") + tr("cannot read core version"));
         second->setText(ignored ? QStringLiteral("> ") + tr("ignored") : original);
-        second->setToolTip(original);
+        second->setToolTip(downloadFailed && !detail.isEmpty() ? detail : original);
         m_table->setSpan(row, 2, 1, 3);
     } else {
         second->setText(ignored ? tr("ignored") : data.value(QStringLiteral("installed")).toString());

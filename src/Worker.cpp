@@ -1025,6 +1025,9 @@ QList<Worker::RangeResult> Worker::fetchRanges(const QList<QUrl>& urls, qint64 m
 
     startOne = [&](int index, int attempt) {
         QNetworkRequest req = makeRequest(urls.at(index), 15000);
+        // Range-запросы к raw.githubusercontent.com надёжнее идут по HTTP/1.1:
+        // при HTTP/2 CDN иногда присылает GOAWAY и рвёт часть потоков.
+        req.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
         req.setRawHeader("Range", "bytes=0-" + QByteArray::number(maxBytes - 1));
         QNetworkReply* reply = nam.get(req);
         Active a;
@@ -1056,8 +1059,8 @@ QList<Worker::RangeResult> Worker::fetchRanges(const QList<QUrl>& urls, qint64 m
         }
         reply->deleteLater();
 
-        if (!err.isEmpty() && !m_cancel.load() && a.attempt < 1) {
-            // Один повтор: сеть иногда рвёт короткие запросы.
+        if (!err.isEmpty() && !m_cancel.load() && a.attempt < 2) {
+            // Два повтора: сеть/CDN иногда рвёт короткие запросы.
             startOne(a.index, a.attempt + 1);
             startMore();
             return;
@@ -1565,7 +1568,30 @@ void Worker::prepareCores(const Params& p, const ModelInfo& m) {
 
     QElapsedTimer headerTimer;
     headerTimer.start();
-    const QList<RangeResult> headers = fetchRanges(headerUrls, kCoreHeaderBytes, 8);
+    QList<RangeResult> headers = fetchRanges(headerUrls, kCoreHeaderBytes, 4);
+    if (m_cancel.load()) {
+        emit log(QStringLiteral("Operation cancelled by user."));
+        return;
+    }
+    // Если часть Range-запросов всё же оборвалась (GOAWAY и т.п.), повторяем
+    // только неудачные заголовки последовательно — так CDN не получает шквал
+    // параллельных запросов.
+    QList<int> failedHeaders;
+    QList<QUrl> retryUrls;
+    for (int i = 0; i < headers.size(); ++i) {
+        if (!headers.at(i).ok) {
+            failedHeaders << i;
+            retryUrls << remote.at(i).url;
+        }
+    }
+    if (!failedHeaders.isEmpty() && !m_cancel.load()) {
+        emit logVerbose(QStringLiteral("Retrying %1 core header(s) sequentially.")
+                            .arg(failedHeaders.size()));
+        const QList<RangeResult> retried = fetchRanges(retryUrls, kCoreHeaderBytes, 1);
+        for (int i = 0; i < retried.size() && i < failedHeaders.size(); ++i) {
+            if (retried.at(i).ok) headers[failedHeaders.at(i)] = retried.at(i);
+        }
+    }
     if (m_cancel.load()) {
         emit log(QStringLiteral("Operation cancelled by user."));
         return;
@@ -1634,7 +1660,8 @@ void Worker::prepareCores(const Params& p, const ModelInfo& m) {
         QStringList details;
         for (const auto& e : parseErrors) details << e.first + ": " + e.second;
         emit logVerbose(QStringLiteral("Core header errors: %1").arg(details.join(QStringLiteral("; "))));
-        emit log(QStringLiteral("Warning: Could not read %1 core header(s); they are shown in red.")
+        emit log(QStringLiteral("Warning: Could not get %1 core version(s); they are shown in red. "
+                                "Press 'Download via GitHub' again to retry.")
                      .arg(parseErrors.size()));
     }
     emit log(QStringLiteral("Core list ready: %1 available%2, headers read in %3 s. "
