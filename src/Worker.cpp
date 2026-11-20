@@ -1388,10 +1388,6 @@ void Worker::doDownload(const Params& p) {
                              : QStringLiteral("skipped")));
         return;
     }
-    if (p.downloadSelectedCores) {
-        downloadSelectedCores(p, m);
-        return;
-    }
 
     emit log(QStringLiteral("Fetching actual cores list from GitHub repository..."));
     QElapsedTimer listTimer;
@@ -1642,45 +1638,52 @@ void Worker::prepareCores(const Params& p, const ModelInfo& m) {
                      .arg(parseErrors.size()));
     }
     emit log(QStringLiteral("Core list ready: %1 available%2, headers read in %3 s. "
-                            "Select cores and press 'Download selected'.")
+                            "Select cores and press FLASH; missing files will be downloaded automatically.")
                  .arg(parsedCores.size())
                  .arg(notForBoardNote)
                  .arg(headerTimer.elapsed() / 1000.0, 0, 'f', 1));
     if (p.updateFirmware || p.updateCores) emitFirmwareStatus(p.modelIndex);
 }
 
-// Скачивание только выбранных пользователем ядер. Полные .kg больше не
-// загружаются для всего набора.
-void Worker::downloadSelectedCores(const Params& p, const ModelInfo& m) {
-    Q_UNUSED(m);
+// FLASH сам докачивает только недостающие выбранные ядра. Уже скачанные
+// файлы повторно не загружаются.
+bool Worker::ensureSelectedCoresDownloaded(const QStringList& rawSelected, int board, QString* error) {
+    if (error) error->clear();
     const QString wd = workDir();
     const QString coresDir = wd + QStringLiteral("/cores");
-    const int board = p.modelIndex + 1;
     const QString ext = coresExt();
     const QString baseUrl = "https://raw.githubusercontent.com/andykarpov/" + coresRepo() + "/master/cores/";
 
     QStringList selected;
-    for (const QString& raw : p.selectedCoreFiles) {
+    for (const QString& raw : rawSelected) {
         const QString name = QFileInfo(raw).fileName();
         if (!isSafeFileName(name) || !name.endsWith(ext, Qt::CaseInsensitive)) continue;
         if (!selected.contains(name, Qt::CaseInsensitive)) selected << name;
     }
     if (selected.isEmpty()) {
-        emit log(QStringLiteral("Error: No cores are selected for download. Check at least one core in "
-                                "the versions window."));
-        return;
+        if (error) *error = QStringLiteral("No cores are selected for update.");
+        return false;
     }
 
-    emit log(QStringLiteral("Downloading selected cores: %1 file(s)...").arg(selected.size()));
-    QFile::remove(coresDir + "/" + kCoresCompleteMarker);
-    QDir(coresDir).removeRecursively();
+    QStringList missing;
+    for (const QString& name : selected) {
+        const QFileInfo existing(coresDir + "/" + name);
+        if (!existing.exists() || existing.size() <= 0) missing << name;
+    }
+    if (missing.isEmpty()) {
+        emit logVerbose(QStringLiteral("All selected cores are already downloaded."));
+        return true;
+    }
+
+    emit log(QStringLiteral("Downloading selected cores: %1 missing of %2...")
+                 .arg(missing.size()).arg(selected.size()));
     if (!QDir().mkpath(coresDir)) {
-        emit log(QStringLiteral("Error: Cannot create temp folder for cores."));
-        return;
+        if (error) *error = QStringLiteral("Cannot create temp folder for cores.");
+        return false;
     }
 
     QList<DownloadJob> jobs;
-    for (const QString& name : selected) {
+    for (const QString& name : missing) {
         DownloadJob j;
         j.url = QUrl(baseUrl + QString::fromLatin1(QUrl::toPercentEncoding(name)));
         j.dest = coresDir + "/" + name;
@@ -1692,52 +1695,52 @@ void Worker::downloadSelectedCores(const Params& p, const ModelInfo& m) {
     timer.start();
     const QList<JobResult> results = downloadFiles(jobs, 4);
     if (m_cancel.load()) {
-        emit log(QStringLiteral("Operation cancelled by user."));
-        return;
+        if (error) *error = QStringLiteral("cancelled");
+        return false;
     }
 
     int okCount = 0;
-    int parsedCount = 0;
     qint64 totalBytes = 0;
     for (const JobResult& r : results) {
-        if (!r.ok) continue;
-        ++okCount;
-        totalBytes += r.bytes;
-    }
-    for (const QString& name : selected) {
-        CoreFileInfo ci;
-        QString why;
-        if (parseCoreFile(coresDir + "/" + name, board, &ci, &why) == CoreParseResult::Ok) {
-            ++parsedCount;
-            emit logVerbose(QStringLiteral("Downloaded core %1: %2 [%3], build %4.")
-                                .arg(ci.fileName, ci.name, ci.id, ci.build));
-        } else if (!why.isEmpty()) {
-            emit logVerbose(QStringLiteral("Downloaded core %1 header: %2.").arg(name, why));
+        if (r.ok) {
+            ++okCount;
+            totalBytes += r.bytes;
         }
+    }
+    QStringList failed;
+    for (const QString& name : selected) {
+        const QFileInfo downloaded(coresDir + "/" + name);
+        if (!downloaded.exists() || downloaded.size() <= 0) failed << name;
+    }
+    if (!failed.isEmpty()) {
+        if (error) *error = QStringLiteral("Failed to download selected core(s): ") + failed.join(QStringLiteral(", "));
+        emit log(QStringLiteral("Selected cores download: %1/%2 completed.").arg(okCount).arg(missing.size()));
+        return false;
     }
 
     const double secs = timer.elapsed() / 1000.0;
     const qint64 speedKb = secs > 0.0 ? static_cast<qint64>(totalBytes / 1024.0 / secs) : 0;
-    emit log(QStringLiteral("Selected cores downloaded: %1/%2 (%3 KB in %4 s, %5 KB/s), parsed: %6.")
-                 .arg(okCount)
-                 .arg(selected.size())
+    emit log(QStringLiteral("Selected cores downloaded: %1 (%2 KB in %3 s, %4 KB/s).")
+                 .arg(missing.size())
                  .arg(totalBytes / 1024)
                  .arg(secs, 0, 'f', 1)
-                 .arg(speedKb)
-                 .arg(parsedCount));
+                 .arg(speedKb));
 
-    if (okCount == selected.size()) {
-        QFile marker(coresDir + "/" + kCoresCompleteMarker);
-        if (!marker.open(QIODevice::WriteOnly)) {
-            emit log("Warning: Could not create the completion marker (" + marker.errorString() +
-                     "). Flashing with 'Update cores' will be refused.");
+    for (const QString& name : selected) {
+        CoreFileInfo ci;
+        QString why;
+        if (parseCoreFile(coresDir + "/" + name, board, &ci, &why) == CoreParseResult::Ok) {
+            emit logVerbose(QStringLiteral("Selected core %1: %2 [%3], build %4.")
+                                .arg(ci.fileName, ci.name, ci.id, ci.build));
         }
-    } else {
-        emit log(QStringLiteral("Warning: Selected cores set is incomplete. Flashing with 'Update cores' "
-                                "will be refused until all selected cores download."));
     }
 
-    if (p.updateFirmware || p.updateCores) emitFirmwareStatus(p.modelIndex);
+    QFile marker(coresDir + "/" + kCoresCompleteMarker);
+    if (!marker.open(QIODevice::WriteOnly)) {
+        emit logVerbose(QStringLiteral("Could not create the core completion marker: %1")
+                            .arg(marker.errorString()));
+    }
+    return true;
 }
 
 // ----------------------------------------------------------------------------
@@ -2574,7 +2577,15 @@ void Worker::doFlash(const Params& p) {
         QStringList newCores;
         QSet<QString> ignoredReleaseCores;   // только реально скачанные release-ядра
         if (p.updateCores) {
-            if (!QFile::exists(coresDir + "/" + kCoresCompleteMarker)) {
+            // FLASH — единая кнопка действия: если ядра отмечены в панели,
+            // сначала докачиваем только недостающие выбранные файлы.
+            if (p.coreSelectionSet) {
+                QString downloadError;
+                if (!ensureSelectedCoresDownloaded(p.selectedCoreFiles, p.modelIndex + 1, &downloadError)) {
+                    emit log(QStringLiteral("Error: %1").arg(downloadError));
+                    return;
+                }
+            } else if (!QFile::exists(coresDir + "/" + kCoresCompleteMarker)) {
                 emit log(QStringLiteral("Error: No complete set of downloaded cores found. Check 'Update cores' and "
                                         "press 'Download via GitHub' first."));
                 return;
@@ -2629,11 +2640,12 @@ void Worker::doFlash(const Params& p) {
                 for (const QString& raw : p.selectedCoreFiles) {
                     const QString name = QFileInfo(raw).fileName();
                     selected.insert(name.toLower());
-                    if (!QFile::exists(coresDir + "/" + name)) missing << name;
+                    const QFileInfo file(coresDir + "/" + name);
+                    if (!file.exists() || file.size() <= 0) missing << name;
                 }
                 if (!missing.isEmpty()) {
                     emit log(QStringLiteral("Error: Selected core(s) are not downloaded: %1. "
-                                            "Press 'Download selected' in the core list first.")
+                                            "Try FLASH again to retry the download.")
                                  .arg(missing.join(QStringLiteral(", "))));
                     return;
                 }

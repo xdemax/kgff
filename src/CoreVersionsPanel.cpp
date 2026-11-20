@@ -14,7 +14,6 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
-#include <QPushButton>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStyle>
@@ -144,15 +143,10 @@ CoreVersionsPanel::CoreVersionsPanel(QWidget* parent) : QWidget(parent) {
     m_all->setToolTip(tr("Click to cycle: all -> none -> only new."));
     m_all->setEnabled(false);
     m_count = new QLabel;
-    m_downloadSelected = new QPushButton(tr("Download selected"));
-    m_downloadSelected->setVisible(false);
-    connect(m_downloadSelected, &QPushButton::clicked,
-            this, &CoreVersionsPanel::downloadSelectedRequested);
     auto* top = new QHBoxLayout;
     top->addWidget(m_all);
     top->addWidget(m_count);
     top->addStretch();
-    top->addWidget(m_downloadSelected);
 
     m_table = new QTableWidget(0, 5, this);
     m_table->setHorizontalHeaderLabels(QStringList()
@@ -227,7 +221,6 @@ void CoreVersionsPanel::setRows(const QVariantList& rows, const QString& boardNa
                                        << QString()
                                        << (availableList ? tr("Available") : tr("Downloaded")));
     m_note->setVisible(!installedKnown);
-    m_downloadSelected->setVisible(availableList);
 
     m_filling = true;
     QSignalBlocker blocker(m_table);
@@ -309,10 +302,6 @@ void CoreVersionsPanel::clear() {
     m_allMode = AllMode::None;
     m_newTotal = 0;
     m_availableMode = false;
-    if (m_downloadSelected) {
-        m_downloadSelected->setVisible(false);
-        m_downloadSelected->setEnabled(false);
-    }
 }
 
 bool CoreVersionsPanel::hasRows() const {
@@ -471,14 +460,12 @@ void CoreVersionsPanel::updateAllState() {
 
     m_newTotal = newTotal;
     m_all->setEnabled(total > 0);
-    if (m_downloadSelected) {
-        m_downloadSelected->setEnabled(m_availableMode && checked > 0);
-    }
     if (total == 0) {
         m_allMode = AllMode::None;
         QSignalBlocker blocker(m_all);
         m_all->setCheckState(Qt::Unchecked);
         m_count->setText(ignored > 0 ? tr("All cores are ignored") : tr("No cores"));
+        emit selectionChanged();
         return;
     }
 
@@ -502,6 +489,7 @@ void CoreVersionsPanel::updateAllState() {
     if (m_allMode == AllMode::All) m_all->setCheckState(Qt::Checked);
     else if (m_allMode == AllMode::None) m_all->setCheckState(Qt::Unchecked);
     else m_all->setCheckState(Qt::PartiallyChecked);
+    emit selectionChanged();
 }
 
 QStringList CoreVersionsPanel::selectedFiles() const {

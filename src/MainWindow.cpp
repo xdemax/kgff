@@ -352,8 +352,8 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     connect(m_detectBtn, &QPushButton::clicked, this, &MainWindow::onDetectModel);
     connect(m_worker, &Worker::modelDetected, this, &MainWindow::onModelDetected);
     connect(m_worker, &Worker::portsChanged, this, &MainWindow::onRefreshPorts);
-    connect(m_corePanel, &CoreVersionsPanel::downloadSelectedRequested,
-            this, &MainWindow::onDownloadSelectedCores);
+    connect(m_corePanel, &CoreVersionsPanel::selectionChanged,
+            this, &MainWindow::updateActionState);
     connect(m_comCombo, &QComboBox::currentIndexChanged, this, [this](int) {
         updateActionState();
         updatePortPolling();
@@ -526,6 +526,11 @@ void MainWindow::updateActionState() {
     if (m_coresChk->isChecked()) {
         const QString marker = workDir() + QStringLiteral("/cores/download_complete.txt");
         if (QFile::exists(marker)) canFlash = true;
+        // Список с GitHub подготовлен, ядра отмечены: FLASH сам скачает
+        // недостающие выбранные файлы перед записью на карту.
+        if (m_coreListPrepared && m_corePanel && !m_corePanel->selectedFiles().isEmpty()) {
+            canFlash = true;
+        }
     }
     if (m_extraChk->isChecked()) {
         const QString marker = workDir() + QStringLiteral("/extra/extra_complete.txt");
@@ -547,31 +552,9 @@ void MainWindow::onDownload() {
     m_downloadBtn->setText(tr("Downloading..."));
     Params p = collectParams();
     // Ядра качаются в два шага: сначала с GitHub читаются только заголовки
-    // для списка версий, затем панель скачивает полные файлы выбранных ядер.
+    // для списка версий, затем FLASH докачивает полные файлы выбранных ядер.
     if (p.updateCores) p.prepareCores = true;
     m_worker->clearCancel();        // сброс в GUI-потоке до постановки задачи в очередь
-    QMetaObject::invokeMethod(m_worker, [w = m_worker, p]() { w->runDownload(p); }, Qt::QueuedConnection);
-}
-
-void MainWindow::onDownloadSelectedCores() {
-    if (m_busy || !m_coreListPrepared || !m_corePanel) return;
-    const QStringList selected = m_corePanel->selectedFiles();
-    if (selected.isEmpty()) {
-        appendLog(QStringLiteral("Error: No cores are selected. Check at least one core in the list."));
-        return;
-    }
-
-    setBusy(true);
-    m_downloadBtn->setText(tr("Downloading..."));
-    Params p = collectParams();
-    p.updateFirmware = false;
-    p.updateExtra = false;
-    p.updateCores = true;
-    p.prepareCores = false;
-    p.downloadSelectedCores = true;
-    p.coreSelectionSet = true;
-    p.selectedCoreFiles = selected;
-    m_worker->clearCancel();
     QMetaObject::invokeMethod(m_worker, [w = m_worker, p]() { w->runDownload(p); }, Qt::QueuedConnection);
 }
 

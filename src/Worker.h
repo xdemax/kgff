@@ -38,9 +38,8 @@ struct Params {
     // старые файлы считаются релизными и могут быть перенесены в backup.
     QStringList knownCoreFiles;
     // Двухшаговое скачивание ядер: сначала только заголовки/версии, затем
-    // полные файлы лишь для выбранных пользователем ядер.
+    // полные файлы лишь для выбранных пользователем ядер (их качает FLASH).
     bool prepareCores = false;
-    bool downloadSelectedCores = false;
 };
 
 // Фоновый исполнитель. Живёт в отдельном QThread, управляется из GUI через
@@ -140,7 +139,7 @@ private:
 
     void doDownload(const Params& p);
     void prepareCores(const Params& p, const ModelInfo& m);
-    void downloadSelectedCores(const Params& p, const ModelInfo& m);
+    bool ensureSelectedCoresDownloaded(const QStringList& selected, int board, QString* error);
     void doFlash(const Params& p);
     void doOpenSd(const Params& p);
 

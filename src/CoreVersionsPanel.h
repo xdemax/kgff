@@ -6,7 +6,6 @@
 
 class QCheckBox;
 class QLabel;
-class QPushButton;
 class QTableWidget;
 class QTimer;
 
@@ -35,7 +34,7 @@ public:
                            const QString& installed, const QString& latest);
 
 signals:
-    void downloadSelectedRequested();
+    void selectionChanged();
 
 private:
     enum class AllMode { All, None, New, Custom };
@@ -52,7 +51,6 @@ private:
     QTableWidget* m_table = nullptr;
     QCheckBox* m_all = nullptr;
     QLabel* m_count = nullptr;
-    QPushButton* m_downloadSelected = nullptr;
     QTimer* m_blinkTimer = nullptr;
     bool m_blinkOn = false;
     bool m_needsUpdate = false;

@@ -30,7 +30,6 @@ protected:
 
 private slots:
     void onDownload();
-    void onDownloadSelectedCores();
     void onBrowse();
     void onRefreshPorts();
     void pollSerialPorts();
