@@ -950,9 +950,17 @@ void MainWindow::showCorePanel() {
     m_panelToggle->setText(QStringLiteral("<<"));
     m_panelToggle->setToolTip(tr("Hide core versions"));
 
-    // Вторая половина: окно расширяется примерно вдвое, чтобы панель не
-    // отнимала место у журнала. Центрируем уже итоговую ширину целиком.
-    const int target = qMax(m_collapsedWidth * 2, m_collapsedWidth + 360);
+    // Вторая половина: окно расширяется, но не до краёв экрана. На Windows
+    // с масштабированием прежнее «удвоение» упиралось в available.width() и
+    // выглядело как разворот на весь экран.
+    QScreen* screen = QGuiApplication::screenAt(frameGeometry().center());
+    if (!screen) screen = QGuiApplication::primaryScreen();
+    const QRect available = screen ? screen->availableGeometry() : QRect();
+    int target = qMax(m_collapsedWidth * 2, m_collapsedWidth + 360);
+    if (!available.isEmpty()) {
+        const int maxWidth = qMax(m_collapsedWidth, static_cast<int>(available.width() * 0.85));
+        target = qMin(target, maxWidth);
+    }
     centerWindowForWidth(target);
 }
 
@@ -982,7 +990,11 @@ void MainWindow::centerWindowForWidth(int outerWidth) {
     const int frameLeft = frame.left() - x();
     const int frameTop = frame.top() - y();
 
-    const int targetOuterWidth = qMin(outerWidth, available.width());
+    // Не прижимаем окно к краям: на Windows ширина, равная available.width(),
+    // визуально воспринимается как разворот на весь экран.
+    const int margin = 32;
+    const int maxOuterWidth = qMax(1, available.width() - margin * 2);
+    const int targetOuterWidth = qMin(outerWidth, maxOuterWidth);
     const int targetOuterHeight = qMin(frame.height(), available.height());
     const int clientWidth = qMax(1, targetOuterWidth - frameWidth);
     const int clientHeight = qMax(1, targetOuterHeight - frameHeight);
