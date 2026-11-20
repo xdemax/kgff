@@ -39,6 +39,7 @@ private slots:
     void onAutoDetectModel();
     void onStartupFirmwareCheck();
     void onStartupFirmwareCheckFinished();
+    void startStartupFlow();
     void onModelDetected(int modelIndex, const QString& raw);
     void appendLog(const QString& message);
     void appendLogVerbose(const QString& message);
@@ -104,6 +105,8 @@ private:
     QString m_controlPortLocation;        // текущий control-порт
     QString m_lastAutoDetectedPort;       // чтобы не повторять автоопределение
     bool m_startupCheckDone = false;
+    bool m_startupDetectionPending = false;
+    bool m_startupFirmwareCheckStarted = false;
     bool m_coreListPrepared = false;      // список ядер с GitHub уже получен
     bool m_flashStarted = false;
     bool m_flashCores = false;            // в запущенном FLASH обновляются ядра

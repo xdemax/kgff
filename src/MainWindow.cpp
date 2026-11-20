@@ -448,10 +448,10 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     onRefreshPorts();
     appendLog(QStringLiteral("Application is ready."));
 
-    // Первым делом — версии прошивки для всех моделей на GitHub. После неё
-    // запускаем обычный автодетект модели, если выбран control-порт.
-    // Обе задачи идут в рабочем потоке и не блокируют GUI.
-    QMetaObject::invokeMethod(this, &MainWindow::onStartupFirmwareCheck, Qt::QueuedConnection);
+    // Порядок запуска: сначала порт и AT+KARABAS=version, затем проверка
+    // актуальных версий прошивки на GitHub. Если порта нет — проверку
+    // запускаем сразу, а автоопределение сработает при подключении платы.
+    QMetaObject::invokeMethod(this, &MainWindow::startStartupFlow, Qt::QueuedConnection);
 }
 
 MainWindow::~MainWindow() {
@@ -656,7 +656,26 @@ void MainWindow::onAutoDetectModel() {
     QMetaObject::invokeMethod(m_worker, [w = m_worker, p]() { w->runDetectModel(p); }, Qt::QueuedConnection);
 }
 
+void MainWindow::startStartupFlow() {
+    if (m_closeRequested) return;
+    if (m_busy) {
+        // Пользователь успел начать операцию — не влезаем, попробуем позже.
+        QTimer::singleShot(200, this, &MainWindow::startStartupFlow);
+        return;
+    }
+    if (!m_comCombo->currentData().toString().isEmpty()) {
+        m_startupDetectionPending = true;
+        onAutoDetectModel();
+        return;
+    }
+    // Порта ещё нет: узнать версию платы сейчас нельзя. Проверяем прошивки,
+    // а модель определится при появлении control-порта.
+    onStartupFirmwareCheck();
+}
+
 void MainWindow::onStartupFirmwareCheck() {
+    if (m_startupFirmwareCheckStarted) return;
+    m_startupFirmwareCheckStarted = true;
     m_worker->clearCancel();
     QMetaObject::invokeMethod(m_worker, [w = m_worker]() { w->runStartupFirmwareCheck(); },
                               Qt::QueuedConnection);
@@ -664,8 +683,8 @@ void MainWindow::onStartupFirmwareCheck() {
 
 void MainWindow::onStartupFirmwareCheckFinished() {
     m_startupCheckDone = true;
-    // Если пользователь уже запустил другую операцию, не перебиваем её
-    // автоопределением модели.
+    // Если плату подключили позже и порт появился во время проверки,
+    // автоопределение запустится только сейчас.
     if (!m_busy && !m_closeRequested) maybeAutoDetectPort();
 }
 
@@ -1011,6 +1030,8 @@ void MainWindow::onFirmwareReady(const QString& path) {
 }
 
 void MainWindow::onWorkerFinished() {
+    const bool startFirmwareCheck = m_startupDetectionPending;
+    m_startupDetectionPending = false;
     if (m_flashStarted) {
         if (m_flashCores) {
             if (m_corePanel) m_corePanel->clear();
@@ -1023,6 +1044,9 @@ void MainWindow::onWorkerFinished() {
         m_flashCores = false;
     }
     setBusy(false);
+    if (startFirmwareCheck && !m_closeRequested) {
+        QMetaObject::invokeMethod(this, &MainWindow::onStartupFirmwareCheck, Qt::QueuedConnection);
+    }
     if (m_closeRequested) close();
 }
 

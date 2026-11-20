@@ -679,6 +679,9 @@ void Worker::runStartupFirmwareCheck() {
                    : QStringLiteral("Warning: Firmware version fetch error."));
     // Проверку обновления флешера делаем только когда сеть уже ответила.
     if (allOk) checkFlasherUpdate();
+    // Версия платы уже известна (автоопределение идёт до этой проверки):
+    // обновляем статус в панели ядер с учётом полученных latest-версий.
+    if (m_boardModelIndex >= 0) emitFirmwareStatus(m_boardModelIndex);
     emit startupFirmwareCheckFinished();
 }
 
