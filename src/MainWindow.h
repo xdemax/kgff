@@ -16,6 +16,7 @@ class QPlainTextEdit;
 class QProcess;
 class QPushButton;
 class QThread;
+class QTimer;
 class QToolButton;
 
 class MainWindow : public QWidget {
@@ -31,6 +32,7 @@ private slots:
     void onDownload();
     void onBrowse();
     void onRefreshPorts();
+    void pollSerialPorts();
     void onFlash();
     void onMsc();
     void onDetectModel();
@@ -56,6 +58,9 @@ private:
     void setBusy(bool busy);
     void applyOptionState();            // доступность поля прошивки зависит от галки Update firmware
     void updateActionState();           // доступность FLASH!/MSC по наличию входных данных
+    void updatePortList(bool userRequested);
+    void updatePortPolling();
+    void maybeAutoDetectPort();
     void openLogFile();
     void writeLogLine(const QString& line);
     void cleanupTemp();
@@ -75,6 +80,7 @@ private:
     QLineEdit* m_pathEdit = nullptr;
     QPushButton* m_browseBtn = nullptr;
     QComboBox* m_comCombo = nullptr;
+    QTimer* m_portPollTimer = nullptr;
     QPushButton* m_refreshBtn = nullptr;
     QPushButton* m_flashBtn = nullptr;
     QPushButton* m_mscBtn = nullptr;
@@ -93,7 +99,10 @@ private:
     QString m_firmwarePath;
     int m_firmwareModelIndex = -1;        // модель, для которой скачана/выбрана прошивка
     int m_collapsedWidth = 0;             // ширина окна до раскрытия панели ядер
-    bool m_startupAutoDetectPending = false;
+    QString m_portSignature;              // чтобы не перестраивать список каждый опрос
+    QString m_controlPortLocation;        // текущий control-порт
+    QString m_lastAutoDetectedPort;       // чтобы не повторять автоопределение
+    bool m_startupCheckDone = false;
     bool m_busy = false;
     bool m_closeRequested = false;
     bool m_accessRuleInstalled = false;   // правило udev уже ставилось в этом запуске

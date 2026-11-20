@@ -50,8 +50,10 @@
    отмечены по умолчанию; точки можно поставить или снять вручную, а чекбокс **All selected** переключает
    все / ни одного / только новые. Панель можно свернуть кнопкой **`<<`** и снова раскрыть **`>>`**. На карту
    копируются только отмеченные ядра.
-5. В списке **Serial port** выберите порт платы. В списке показываются только USB-устройства; нужный порт появляется,
-   когда плата подключена (если его нет, нажмите **Refresh ports**). Пункт «(not selected - flash without reset)» нужен,
+5. В списке **Serial port** выберите порт платы. В списке показываются только USB-устройства; пока порт не выбран,
+   программа раз в секунду проверяет, не подключилась ли плата, — нужный порт появляется сам (кнопка
+   **Refresh ports** — для ручного обновления). После выбора порта фоновый опрос останавливается. Пункт
+   «(not selected - flash without reset)» нужен,
    только если плата уже переведена в режим загрузчика вручную. Начиная с прошивки 26111914 плата показывает **два**
    USB-порта: `[control]` (interface 0 — лог и `AT+KARABAS=...`) и `[core serial]` (interface 2 — только UART ядра).
    Флешер сам выбирает `[control]`; для прошивки нужен именно он.
@@ -63,8 +65,10 @@
 
 При запуске программа сначала в фоне проверяет последние сборки прошивки для всех моделей по
 Atom-лентам коммитов на GitHub (до трёх попыток). Если проверить не удалось, работа продолжается
-как обычно. Затем, если найден ровно один USB-порт, отправляется команда `AT+KARABAS=version`
-и модель выставляется автоматически. Сразу после ответа на неё отправляется
+как обычно. Затем, когда появляется `[control]`-порт, отправляется команда `AT+KARABAS=version`
+и модель выставляется автоматически. Плату можно подключить позже: пока порт не выбран, фоновый
+опрос раз в секунду заметит его и запустит автоопределение. После выбора порта опрос прекращается.
+Сразу после ответа на команду отправляется
 `AT+KARABAS=list`: программа получает список ядер на SD-карте и использует его для сравнения версий.
 Подробный список пишется только в файловый журнал при запуске с `--log`; на экран он не выводится.
 Если `list` не поддерживается, определение модели всё равно продолжается. Если порт промолчал
@@ -89,9 +93,13 @@ Atom-лентам коммитов на GitHub (до трёх попыток). �
 
 На macOS это `/dev/cu.usbmodem<serial>1` (control) и `...3` (core serial); в Windows — два COM-порта, второй
 называется `Karabas core serial`. Сброс 1200 бод в режим загрузчика работает только на control-порту.
+В Windows названия COM-портов могут быть локализованы, поэтому флешер определяет роль по USB-интерфейсу
+`MI_00`/`MI_02`, а не по подписи устройства.
 
 Флешер сам выбирает `[control]`, а в списке портов подписывает `[control]` и `[core serial]`. Порт
-`core serial` для прошивки не используется.
+`core serial` для прошивки не используется. Пока порт не выбран, список портов проверяется в фоне
+раз в секунду; при появлении control-порта модель определяется автоматически, после чего опрос
+останавливается.
 
 ### Работа с SD-картой вручную
 
@@ -235,8 +243,10 @@ Firmware and cores can be updated together or separately — for example, cores 
    with the versions on the card: `installed > downloaded`. Green cores are checked by default; change the checkboxes
    manually or use **All selected** to cycle all / none / only new. Collapse the panel with **`<<`**, expand it again
    with **`>>`**. Only checked cores are copied to the card.
-5. In the **Serial port** list, select the board's port. Only USB devices are shown; the required port appears
-   when the board is connected (if it is missing, click **Refresh ports**). The "(not selected - flash without reset)"
+5. In the **Serial port** list, select the board's port. Only USB devices are shown; while no port is selected,
+   the program checks once per second whether the board has been connected, so the required port appears
+   automatically (the **Refresh ports** button refreshes it manually). Once a port is selected, the background
+   poll stops. The "(not selected - flash without reset)"
    item is only needed if the board has already been put into bootloader mode manually. Starting with firmware 26111914
    the board shows **two** USB ports: `[control]` (interface 0 — the log and `AT+KARABAS=...`) and `[core serial]`
    (interface 2 — the core UART only). The flasher selects `[control]` automatically; this is the port needed for flashing.
@@ -249,8 +259,10 @@ the program will ask for confirmation and stop at a safe point.
 
 On startup the program first checks the latest firmware builds for all models in the background using
 the Atom commit feeds on GitHub (up to three attempts). If the check fails, it continues as usual.
-Then, if exactly one USB port is found, it sends the `AT+KARABAS=version` command to the board and selects
-the model automatically. Immediately after the reply it sends `AT+KARABAS=list`: the program gets the
+Then, when the `[control]` port appears, it sends the `AT+KARABAS=version` command to the board and selects
+the model automatically. You can plug the board in later: while no port is selected, the background poll
+checks once per second and starts model detection when the port appears. The poll stops once a port is selected.
+Immediately after the reply it sends `AT+KARABAS=list`: the program gets the
 cores on the SD card and uses them for version comparison.
 The detailed list is written only to the file log with `--log`; it is not shown in the on-screen log.
 If `list` is not supported, model detection still continues. If the port stays silent
@@ -277,9 +289,12 @@ Since 19.11.2026 (build 26111914) the board shows two USB serial ports:
 
 On macOS these are `/dev/cu.usbmodem<serial>1` (control) and `...3` (core serial); on Windows there are two COM ports,
 the second one is named `Karabas core serial`. The 1200 baud reset into bootloader works on the control port only.
+Windows COM port names may be localized, so the flasher identifies the role by the USB interface
+`MI_00`/`MI_02`, not by the device description.
 
 The flasher selects `[control]` automatically and marks the ports as `[control]` and `[core serial]` in the list.
-The `core serial` port is not used for flashing.
+The `core serial` port is not used for flashing. While no port is selected, the port list is checked in the
+background once per second; when the control port appears, the model is detected automatically and the poll stops.
 
 ### Working with the SD card manually
 

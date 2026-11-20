@@ -31,8 +31,10 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QSerialPortInfo>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QThread>
+#include <QTimer>
 #include <QToolButton>
 #include <QToolTip>
 #include <QCursor>
@@ -48,6 +50,38 @@ enum class KarabasPortRole {
     CoreSerial,     // interface 2: UART of the core
 };
 
+#if defined(Q_OS_WIN)
+// На Windows описание COM-порта локализовано и часто одинаково у обоих
+// интерфейсов ("USB Serial Device"). Роль определяем по USB composite
+// interface: MI_00 — control, MI_02 — core serial.
+KarabasPortRole windowsPortRole(const QString& portName) {
+    QSettings usb(QStringLiteral("HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\USB"),
+                  QSettings::Registry64Format);
+    const QStringList devices = usb.childGroups();
+    for (const QString& device : devices) {
+        if (!device.contains(QStringLiteral("VID_2E8A&PID_000A"), Qt::CaseInsensitive)) continue;
+        const bool control = device.contains(QStringLiteral("MI_00"), Qt::CaseInsensitive);
+        const bool coreSerial = device.contains(QStringLiteral("MI_02"), Qt::CaseInsensitive);
+        if (!control && !coreSerial) continue;
+
+        usb.beginGroup(device);
+        const QStringList instances = usb.childGroups();
+        for (const QString& instance : instances) {
+            usb.beginGroup(instance);
+            const QString name =
+                usb.value(QStringLiteral("Device Parameters/PortName")).toString();
+            usb.endGroup();
+            if (name.compare(portName, Qt::CaseInsensitive) == 0) {
+                usb.endGroup();
+                return control ? KarabasPortRole::Control : KarabasPortRole::CoreSerial;
+            }
+        }
+        usb.endGroup();
+    }
+    return KarabasPortRole::Unknown;
+}
+#endif
+
 // С прошивки 2026-11-19 у платы два CDC-порта. Для флешера нужен control
 // (interface 0), core serial (interface 2) — это чистый UART ядра.
 KarabasPortRole karabasPortRole(const QSerialPortInfo& info) {
@@ -55,6 +89,11 @@ KarabasPortRole karabasPortRole(const QSerialPortInfo& info) {
         info.vendorIdentifier() != 0x2e8a || info.productIdentifier() != 0x000a) {
         return KarabasPortRole::Unknown;
     }
+
+#if defined(Q_OS_WIN)
+    const KarabasPortRole windowsRole = windowsPortRole(info.portName());
+    if (windowsRole != KarabasPortRole::Unknown) return windowsRole;
+#endif
 
 #if defined(Q_OS_LINUX)
     // Самый надёжный признак: номер интерфейса в sysfs.
@@ -92,8 +131,8 @@ KarabasPortRole karabasPortRole(const QSerialPortInfo& info) {
     if (location.endsWith(QLatin1Char('3'))) return KarabasPortRole::CoreSerial;
 #endif
 
-    // Старая прошивка с одним портом или control без отдельного имени.
-    return KarabasPortRole::Control;
+    // Роль не определена: лучше не выбирать порт автоматически, чем угадать.
+    return KarabasPortRole::Unknown;
 }
 
 }  // namespace
@@ -313,7 +352,10 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     connect(m_detectBtn, &QPushButton::clicked, this, &MainWindow::onDetectModel);
     connect(m_worker, &Worker::modelDetected, this, &MainWindow::onModelDetected);
     connect(m_worker, &Worker::portsChanged, this, &MainWindow::onRefreshPorts);
-    connect(m_comCombo, &QComboBox::currentIndexChanged, this, [this](int) { updateActionState(); });
+    connect(m_comCombo, &QComboBox::currentIndexChanged, this, [this](int) {
+        updateActionState();
+        updatePortPolling();
+    });
     connect(m_modelCombo, &QComboBox::currentIndexChanged, this, [this](int idx) {
         // Прошивка привязана к модели: при смене модели сбрасываем путь, чтобы
         // случайно не прошить плату прошивкой другой модели.
@@ -339,12 +381,17 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     if (m_fileLogging) openLogFile();
     appendLog(QStringLiteral("Karabas Flasher v") + QString::fromLatin1(APP_VERSION) + QStringLiteral(" (") +
               QString::fromLatin1(APP_GIT_DESCRIBE) + QLatin1Char(')'));
+    // Опрос нужен только пока порт не выбран: плату можно подключить после
+    // запуска, а уже выбранный порт не сканируем каждую секунду.
+    m_portPollTimer = new QTimer(this);
+    m_portPollTimer->setInterval(1000);
+    connect(m_portPollTimer, &QTimer::timeout, this, &MainWindow::pollSerialPorts);
     onRefreshPorts();
     appendLog(QStringLiteral("Application is ready."));
+
     // Первым делом — версии прошивки для всех моделей на GitHub. После неё
     // запускаем обычный автодетект модели, если выбран control-порт.
     // Обе задачи идут в рабочем потоке и не блокируют GUI.
-    m_startupAutoDetectPending = !m_comCombo->currentData().toString().isEmpty();
     QMetaObject::invokeMethod(this, &MainWindow::onStartupFirmwareCheck, Qt::QueuedConnection);
 }
 
@@ -523,6 +570,7 @@ void MainWindow::onMsc() {
 
 void MainWindow::onDetectModel() {
     if (m_busy) return;
+    m_lastAutoDetectedPort = m_comCombo->currentData().toString();
     setBusy(true);
     const Params p = collectParams();
     m_worker->clearCancel();
@@ -533,6 +581,7 @@ void MainWindow::onDetectModel() {
 // пользователю. Если ответа нет - просто пишем в лог, что модель не определена.
 void MainWindow::onAutoDetectModel() {
     if (m_busy) return;
+    m_lastAutoDetectedPort = m_comCombo->currentData().toString();
     Params p = collectParams();
     p.autoDetect = true;
     m_worker->clearCancel();
@@ -546,11 +595,10 @@ void MainWindow::onStartupFirmwareCheck() {
 }
 
 void MainWindow::onStartupFirmwareCheckFinished() {
-    const bool pending = m_startupAutoDetectPending;
-    m_startupAutoDetectPending = false;
+    m_startupCheckDone = true;
     // Если пользователь уже запустил другую операцию, не перебиваем её
     // автоопределением модели.
-    if (pending && !m_busy && !m_closeRequested) onAutoDetectModel();
+    if (!m_busy && !m_closeRequested) maybeAutoDetectPort();
 }
 
 void MainWindow::onModelDetected(int modelIndex, const QString& raw) {
@@ -577,18 +625,43 @@ void MainWindow::onBrowse() {
 }
 
 void MainWindow::onRefreshPorts() {
-    m_comCombo->clear();
-    m_comCombo->addItem(tr("(not selected - flash without reset)"), QString());
-    appendLog(QStringLiteral("Scanning available serial ports..."));
+    updatePortList(true);
+    maybeAutoDetectPort();
+}
+
+void MainWindow::pollSerialPorts() {
+    if (m_busy) return;
+    // Если порт уже выбран (автоматически или вручную), опрос не нужен.
+    if (m_comCombo && !m_comCombo->currentData().toString().isEmpty()) {
+        updatePortPolling();
+        return;
+    }
+    updatePortList(false);
+    maybeAutoDetectPort();
+    updatePortPolling();
+}
+
+void MainWindow::updatePortList(bool userRequested) {
+    struct PortEntry {
+        QString text;
+        QString location;
+        KarabasPortRole role = KarabasPortRole::Unknown;
+    };
+
+    if (userRequested) appendLog(QStringLiteral("Scanning available serial ports..."));
 
     QList<QSerialPortInfo> ports = QSerialPortInfo::availablePorts();
     std::sort(ports.begin(), ports.end(), [](const QSerialPortInfo& a, const QSerialPortInfo& b) {
         return a.systemLocation() < b.systemLocation();
     });
-    int added = 0;
+
+    QList<PortEntry> entries;
     int controlCount = 0;
-    int controlIndex = -1;
     int coreSerialCount = 0;
+    QString oldControl = m_controlPortLocation;
+    QString newControl;
+    QString newControlText;
+
     for (const QSerialPortInfo& info : ports) {
 #if defined(Q_OS_MACOS)
         if (info.systemLocation().startsWith(QStringLiteral("/dev/tty."))) continue;   // оставляем /dev/cu.*
@@ -614,37 +687,93 @@ void MainWindow::onRefreshPorts() {
                         .arg(info.vendorIdentifier(), 4, 16, QLatin1Char('0'))
                         .arg(info.productIdentifier(), 4, 16, QLatin1Char('0'));
         }
-        const int itemIndex = m_comCombo->count();
-        m_comCombo->addItem(text, location);
+        entries.append(PortEntry{text, location, role});
         if (role == KarabasPortRole::Control) {
             ++controlCount;
-            controlIndex = itemIndex;
+            newControl = location;
+            newControlText = text;
         } else if (role == KarabasPortRole::CoreSerial) {
             ++coreSerialCount;
         }
-        appendLog("Found port: " + text);
-        ++added;
-    }
-    if (added == 0) {
-        appendLog(QStringLiteral("Error: Active serial ports not found. Connect the Karabas by USB "
-                                 "and press 'Refresh ports'."));
     }
 
-    // Явно выбираем control-порт новой прошивки: у платы теперь два CDC-порта,
-    // и core serial для AT-команд не подходит.
-    int selectedIndex = 0;
-    if (controlCount == 1) {
-        selectedIndex = controlIndex;
-        appendLog("Selected Karabas control port: " + m_comCombo->itemText(controlIndex));
-    } else if (controlCount > 1) {
+    // Уникальный control — основной кандидат. Если порт один и это не core
+    // serial (старая прошивка или роль не определилась), тоже считаем его
+    // control: именно так работали версии до появления второго порта.
+    if (controlCount != 1) {
+        newControl.clear();
+        newControlText.clear();
+        if (controlCount == 0 && entries.size() == 1 && coreSerialCount == 0) {
+            newControl = entries.first().location;
+            newControlText = entries.first().text;
+        }
+    }
+    m_controlPortLocation = newControl;
+    if (oldControl != newControl) {
+        if (!newControl.isEmpty()) {
+            if (!userRequested && controlCount == 1) {
+                appendLog("Karabas control port detected: " + newControlText);
+            }
+        } else if (!oldControl.isEmpty()) {
+            appendLog(QStringLiteral("Karabas control port disconnected."));
+            m_lastAutoDetectedPort.clear();
+        }
+    }
+
+    QStringList signatureParts;
+    for (const PortEntry& entry : entries) {
+        signatureParts << entry.location + QLatin1Char('|') +
+                              QString::number(static_cast<int>(entry.role)) + QLatin1Char('|') +
+                              entry.text;
+    }
+    const QString signature = signatureParts.join(QLatin1Char('\n'));
+    if (!userRequested && signature == m_portSignature) {
+        updatePortPolling();
+        return;
+    }
+    m_portSignature = signature;
+
+    const int added = entries.size();
+    if (userRequested) {
+        for (const PortEntry& entry : entries) appendLog("Found port: " + entry.text);
+        if (added == 0) {
+            appendLog(QStringLiteral("Error: Active serial ports not found. Connect the Karabas by USB "
+                                     "and press 'Refresh ports'."));
+        }
+    }
+
+    const QString previous = m_comCombo->currentData().toString();
+    m_comCombo->clear();
+    m_comCombo->addItem(tr("(not selected - flash without reset)"), QString());
+
+    int controlIndex = -1;
+    int previousIndex = -1;
+    for (const PortEntry& entry : entries) {
+        const int itemIndex = m_comCombo->count();
+        m_comCombo->addItem(entry.text, entry.location);
+        if (entry.role == KarabasPortRole::Control) controlIndex = itemIndex;
+        if (!previous.isEmpty() && entry.location == previous) previousIndex = itemIndex;
+    }
+
+    // При изменении набора портов уникальный control важнее прежнего выбора:
+    // именно к нему нужно отправлять AT-команды. Пока набор не меняется,
+    // ручной выбор пользователя (например, core serial) не трогаем.
+    int selectedIndex = controlCount == 1 ? controlIndex : previousIndex;
+    if (selectedIndex < 0) {
+        if (added == 1 && coreSerialCount == 0) {
+            selectedIndex = 1;      // единственный USB-порт (старая прошивка или другое устройство)
+        } else {
+            selectedIndex = 0;
+        }
+    }
+
+    if (controlCount > 1) {
         appendLog(QStringLiteral("Warning: More than one Karabas control port found. Select the required "
                                  "board manually."));
-    } else if (added == 1 && coreSerialCount == 0) {
-        selectedIndex = 1;      // единственный USB-порт (старая прошивка или другое устройство)
-    } else if (coreSerialCount > 0) {
-        appendLog(QStringLiteral("Warning: Only the Karabas core serial port was found. The control port is "
-                                 "needed for flashing; reconnect the board and press 'Refresh ports'."));
-    } else if (added > 1) {
+    } else if (controlCount == 0 && coreSerialCount > 0) {
+        appendLog(QStringLiteral("Warning: Could not identify the Karabas control port automatically. "
+                                 "Select the [control] port manually; [core serial] is not used for flashing."));
+    } else if (controlCount == 0 && added > 1) {
         appendLog(QStringLiteral("Warning: More than one USB serial port found. Select the Karabas control "
                                  "port manually."));
     }
@@ -652,8 +781,36 @@ void MainWindow::onRefreshPorts() {
         appendLog(QStringLiteral("Karabas core serial port is for the core UART only and is not used for "
                                  "flashing."));
     }
+
     m_comCombo->setCurrentIndex(selectedIndex);
+    if (userRequested && controlCount == 1 && selectedIndex == controlIndex) {
+        appendLog("Selected Karabas control port: " + m_comCombo->itemText(controlIndex));
+    }
     updateActionState();
+    updatePortPolling();
+}
+
+void MainWindow::updatePortPolling() {
+    if (!m_portPollTimer) return;
+    // Опрашиваем только пока control-порт не найден и порт не выбран.
+    // Если пользователь выбрал конкретный порт (или «not selected» при
+    // найденном control), не трогаем систему каждую секунду.
+    const bool needPolling = m_comCombo && m_comCombo->currentData().toString().isEmpty() &&
+                             m_controlPortLocation.isEmpty();
+    if (needPolling && !m_portPollTimer->isActive()) {
+        m_portPollTimer->start();
+    } else if (!needPolling && m_portPollTimer->isActive()) {
+        m_portPollTimer->stop();
+    }
+}
+
+void MainWindow::maybeAutoDetectPort() {
+    if (!m_startupCheckDone || m_busy || !m_comCombo) return;
+    const QString selected = m_comCombo->currentData().toString();
+    if (selected.isEmpty() || selected != m_controlPortLocation) return;
+    if (selected == m_lastAutoDetectedPort) return;
+    m_lastAutoDetectedPort = selected;
+    onAutoDetectModel();
 }
 
 void MainWindow::onOpenFolder(const QString& path) {
