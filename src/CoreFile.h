@@ -27,6 +27,13 @@ enum class CoreParseResult {
 // поэтому board обязателен. why заполняется для Error.
 CoreParseResult parseCoreFile(const QString& path, int board, CoreFileInfo* info, QString* why);
 
+// Разбирает заголовок из уже прочитанного начала файла (например, первых
+// 64 КБ, полученных HTTP Range). fileSize — реальный размер файла на сервере;
+// если нужные секции не попали в data, возвращается Error. fileName заполняет
+// вызывающий: в data имени файла нет.
+CoreParseResult parseCoreHeaderData(const QByteArray& data, qint64 fileSize, int board,
+                                    CoreFileInfo* info, QString* why);
+
 // Разбирает ответ платы на AT+KARABAS=list:
 //   +KARABAS:<file>;<id>;<name>;<build>
 //   ...

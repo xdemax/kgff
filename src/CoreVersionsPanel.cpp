@@ -14,6 +14,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
+#include <QPushButton>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStyle>
@@ -143,10 +144,15 @@ CoreVersionsPanel::CoreVersionsPanel(QWidget* parent) : QWidget(parent) {
     m_all->setToolTip(tr("Click to cycle: all -> none -> only new."));
     m_all->setEnabled(false);
     m_count = new QLabel;
+    m_downloadSelected = new QPushButton(tr("Download selected"));
+    m_downloadSelected->setVisible(false);
+    connect(m_downloadSelected, &QPushButton::clicked,
+            this, &CoreVersionsPanel::downloadSelectedRequested);
     auto* top = new QHBoxLayout;
     top->addWidget(m_all);
     top->addWidget(m_count);
     top->addStretch();
+    top->addWidget(m_downloadSelected);
 
     m_table = new QTableWidget(0, 5, this);
     m_table->setHorizontalHeaderLabels(QStringList()
@@ -208,10 +214,20 @@ CoreVersionsPanel::CoreVersionsPanel(QWidget* parent) : QWidget(parent) {
     clear();
 }
 
-void CoreVersionsPanel::setRows(const QVariantList& rows, const QString& boardName, bool installedKnown) {
+void CoreVersionsPanel::setRows(const QVariantList& rows, const QString& boardName, bool installedKnown,
+                                bool availableList) {
     m_rows = rows;
-    m_title->setText(tr("Downloaded cores for %1").arg(boardName));
+    m_availableMode = availableList;
+    m_title->setText(availableList ? tr("Available cores for %1").arg(boardName)
+                                   : tr("Downloaded cores for %1").arg(boardName));
+    m_table->setHorizontalHeaderLabels(QStringList()
+                                       << QString()
+                                       << tr("Core")
+                                       << tr("Installed")
+                                       << QString()
+                                       << (availableList ? tr("Available") : tr("Downloaded")));
     m_note->setVisible(!installedKnown);
+    m_downloadSelected->setVisible(availableList);
 
     m_filling = true;
     QSignalBlocker blocker(m_table);
@@ -292,6 +308,11 @@ void CoreVersionsPanel::clear() {
     m_count->clear();
     m_allMode = AllMode::None;
     m_newTotal = 0;
+    m_availableMode = false;
+    if (m_downloadSelected) {
+        m_downloadSelected->setVisible(false);
+        m_downloadSelected->setEnabled(false);
+    }
 }
 
 bool CoreVersionsPanel::hasRows() const {
@@ -302,6 +323,16 @@ QStringList CoreVersionsPanel::ignoredFiles() const {
     QStringList files;
     for (const QString& file : m_ignored) files << file;
     files.sort();
+    return files;
+}
+
+QStringList CoreVersionsPanel::allFiles() const {
+    QStringList files;
+    if (!m_table) return files;
+    for (int r = 0; r < m_table->rowCount(); ++r) {
+        const QTableWidgetItem* core = m_table->item(r, 1);
+        if (core && !core->text().isEmpty()) files << core->text();
+    }
     return files;
 }
 
@@ -440,6 +471,9 @@ void CoreVersionsPanel::updateAllState() {
 
     m_newTotal = newTotal;
     m_all->setEnabled(total > 0);
+    if (m_downloadSelected) {
+        m_downloadSelected->setEnabled(m_availableMode && checked > 0);
+    }
     if (total == 0) {
         m_allMode = AllMode::None;
         QSignalBlocker blocker(m_all);

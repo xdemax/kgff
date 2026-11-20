@@ -30,6 +30,7 @@ protected:
 
 private slots:
     void onDownload();
+    void onDownloadSelectedCores();
     void onBrowse();
     void onRefreshPorts();
     void pollSerialPorts();
@@ -42,7 +43,8 @@ private slots:
     void onModelDetected(int modelIndex, const QString& raw);
     void appendLog(const QString& message);
     void appendLogVerbose(const QString& message);
-    void onCoreVersionsReady(const QVariantList& rows, const QString& boardName, bool installedKnown);
+    void onCoreVersionsReady(const QVariantList& rows, const QString& boardName, bool installedKnown,
+                             bool availableList);
     void onFirmwareStatusReady(bool known, bool needsUpdate,
                                const QString& installed, const QString& latest);
     void onAppUpdateAvailable(const QString& version, const QString& url);
@@ -103,6 +105,7 @@ private:
     QString m_controlPortLocation;        // текущий control-порт
     QString m_lastAutoDetectedPort;       // чтобы не повторять автоопределение
     bool m_startupCheckDone = false;
+    bool m_coreListPrepared = false;      // список ядер с GitHub уже получен
     bool m_busy = false;
     bool m_closeRequested = false;
     bool m_accessRuleInstalled = false;   // правило udev уже ставилось в этом запуске

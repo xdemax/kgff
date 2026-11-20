@@ -44,6 +44,7 @@ namespace {
 const qint64 kMaxTextBytes = 4 * 1024 * 1024;       // JSON / HTML
 const qint64 kMaxFileBytes = 64 * 1024 * 1024;      // прошивка / ядро
 const qint64 kMaxExtraBytes = 256 * 1024 * 1024;    // extra.zip
+const qint64 kCoreHeaderBytes = 64 * 1024;          // заголовок .kg для чтения версии по HTTP Range
 const QString kCoresCompleteMarker = QStringLiteral("download_complete.txt");
 const QString kExtraCompleteMarker = QStringLiteral("extra_complete.txt");
 const QString kExtraUrl = QStringLiteral("https://raw.githubusercontent.com/xdemax/kgff/refs/heads/main/extra/extra.zip");
@@ -53,6 +54,63 @@ const QString kFirmwareAtomBase =
     QStringLiteral("https://github.com/andykarpov/karabas-go/commits/master/firmware/");
 const QString kFirmwareApiBase =
     QStringLiteral("https://api.github.com/repos/andykarpov/karabas-go/commits?path=firmware/");
+
+// Строки для панели сравнения. Используются и при подготовке списка по
+// заголовкам с GitHub, и после полного скачивания ядер.
+QVariantList buildCoreRows(const QList<CoreFileInfo>& parsed,
+                           const QStringList& notForBoard,
+                           const QList<QPair<QString, QString>>& parseErrors,
+                           const QHash<QString, QString>& installedByFile,
+                           const QHash<QString, QString>& installedById,
+                           bool installedKnown) {
+    QVariantList rows;
+    for (const CoreFileInfo& ci : parsed) {
+        QVariantMap row;
+        row.insert(QStringLiteral("file"), ci.fileName);
+        row.insert(QStringLiteral("downloaded"), ci.build);
+
+        QString state;
+        if (!installedKnown) {
+            row.insert(QStringLiteral("installed"), QStringLiteral("unknown"));
+            state = QStringLiteral("unknown");
+        } else {
+            auto it = installedByFile.constFind(ci.fileName.toLower());
+            if (it == installedByFile.constEnd()) {
+                it = installedById.constFind(ci.id.toLower());
+            }
+            if (it == installedByFile.constEnd()) {
+                row.insert(QStringLiteral("installed"), QStringLiteral("not installed"));
+                state = QStringLiteral("newer");
+            } else {
+                const QString installedBuild = it.value();
+                row.insert(QStringLiteral("installed"), installedBuild);
+                const int cmp = compareCoreBuilds(installedBuild, ci.build);
+                state = cmp < 0 ? QStringLiteral("newer")
+                                : (cmp == 0 ? QStringLiteral("same") : QStringLiteral("older"));
+            }
+        }
+        row.insert(QStringLiteral("state"), state);
+        rows.append(row);
+    }
+    for (const QString& file : notForBoard) {
+        QVariantMap row;
+        row.insert(QStringLiteral("file"), file);
+        row.insert(QStringLiteral("state"), QStringLiteral("notSupported"));
+        rows.append(row);
+    }
+    for (const auto& e : parseErrors) {
+        QVariantMap row;
+        row.insert(QStringLiteral("file"), e.first);
+        row.insert(QStringLiteral("detail"), e.second);
+        row.insert(QStringLiteral("state"), QStringLiteral("parseError"));
+        rows.append(row);
+    }
+    std::sort(rows.begin(), rows.end(), [](const QVariant& a, const QVariant& b) {
+        return a.toMap().value(QStringLiteral("file")).toString().toLower() <
+               b.toMap().value(QStringLiteral("file")).toString().toLower();
+    });
+    return rows;
+}
 
 QString firmwareBuildFromText(const QString& text) {
     static const QRegularExpression re(
@@ -920,13 +978,153 @@ QList<Worker::JobResult> Worker::downloadFiles(const QList<DownloadJob>& jobs, i
     return results;
 }
 
-QStringList Worker::fetchCoresList() {
-    QStringList cores;
+QList<Worker::RangeResult> Worker::fetchRanges(const QList<QUrl>& urls, qint64 maxBytes,
+                                               int maxParallel) {
+    QList<RangeResult> results;
+    for (int i = 0; i < urls.size(); ++i) {
+        RangeResult r;
+        r.error = QStringLiteral("cancelled");
+        results.append(r);
+    }
+
+    struct Active {
+        int index = -1;
+        int attempt = 0;
+        QByteArray body;
+        qint64 totalSize = -1;
+        bool tooBig = false;
+    };
+
+    QNetworkAccessManager nam;
+    QEventLoop loop;
+    QHash<QNetworkReply*, Active> active;
+    int next = 0;
+
+    auto drain = [&](QNetworkReply* reply) {
+        auto it = active.find(reply);
+        if (it == active.end()) return;
+        Active& a = it.value();
+        if (a.tooBig) return;
+        const QByteArray chunk = reply->readAll();
+        if (chunk.isEmpty()) return;
+        a.body.append(chunk);
+        if (a.body.size() > maxBytes) {
+            a.body.truncate(static_cast<int>(maxBytes));
+            a.tooBig = true;
+            reply->abort();
+        }
+    };
+
+    auto maybeQuit = [&]() {
+        if (active.isEmpty() && (next >= urls.size() || m_cancel.load())) loop.quit();
+    };
+
+    std::function<void()> startMore;
+    std::function<void(int, int)> startOne;
+    std::function<void(QNetworkReply*)> finish;
+
+    startOne = [&](int index, int attempt) {
+        QNetworkRequest req = makeRequest(urls.at(index), 15000);
+        req.setRawHeader("Range", "bytes=0-" + QByteArray::number(maxBytes - 1));
+        QNetworkReply* reply = nam.get(req);
+        Active a;
+        a.index = index;
+        a.attempt = attempt;
+        active.insert(reply, a);
+        QObject::connect(reply, &QNetworkReply::readyRead, &loop, [&, reply]() { drain(reply); });
+        QObject::connect(reply, &QNetworkReply::finished, &loop, [&, reply]() { finish(reply); });
+    };
+
+    finish = [&](QNetworkReply* reply) {
+        drain(reply);
+        auto it = active.find(reply);
+        if (it == active.end()) return;
+        const Active a = it.value();
+        active.erase(it);
+
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        QString err;
+        if (m_cancel.load()) {
+            err = QStringLiteral("cancelled");
+        } else if (a.tooBig) {
+            err = QStringLiteral("range response is too large");
+        } else if (reply->error() != QNetworkReply::NoError) {
+            err = reply->errorString();
+            if (status != 0) err += " (HTTP " + QString::number(status) + ")";
+        } else if (status != 200 && status != 206) {
+            err = "HTTP status " + QString::number(status);
+        }
+        reply->deleteLater();
+
+        if (!err.isEmpty() && !m_cancel.load() && a.attempt < 1) {
+            // Один повтор: сеть иногда рвёт короткие запросы.
+            startOne(a.index, a.attempt + 1);
+            startMore();
+            return;
+        }
+
+        RangeResult& r = results[a.index];
+        r = RangeResult();
+        r.ok = err.isEmpty();
+        r.error = err;
+        r.body = a.body;
+        if (!r.ok) r.body.clear();
+
+        if (r.ok) {
+            const QByteArray contentRange = reply->rawHeader("Content-Range");
+            const int slash = contentRange.lastIndexOf('/');
+            if (slash >= 0) {
+                bool ok = false;
+                const qint64 total = contentRange.mid(slash + 1).trimmed().toLongLong(&ok);
+                if (ok) r.totalSize = total;
+            }
+            if (r.totalSize < 0) r.totalSize = a.body.size();
+        }
+
+        startMore();
+        maybeQuit();
+    };
+
+    startMore = [&]() {
+        while (!m_cancel.load() && static_cast<int>(active.size()) < maxParallel && next < urls.size()) {
+            startOne(next++, 0);
+        }
+    };
+
+    QTimer cancelPoll;
+    cancelPoll.setInterval(100);
+    QObject::connect(&cancelPoll, &QTimer::timeout, &loop, [&]() {
+        if (!m_cancel.load()) return;
+        const QList<QNetworkReply*> replies = active.keys();
+        for (QNetworkReply* r : replies) r->abort();
+        maybeQuit();
+    });
+
+    startMore();
+    if (!active.isEmpty()) {
+        cancelPoll.start();
+        loop.exec();
+        cancelPoll.stop();
+    }
+    return results;
+}
+
+QList<Worker::RemoteCoreInfo> Worker::fetchCoresList() {
+    QList<RemoteCoreInfo> cores;
     const QString& ext = coresExt();
-    auto add = [&](const QString& name) {
+    const QString baseUrl = "https://raw.githubusercontent.com/andykarpov/" + coresRepo() + "/master/cores/";
+    auto add = [&](const QString& name, qint64 size, const QUrl& url) {
         if (!isSafeFileName(name)) return;                       // защита от "../" и т.п.
         if (!name.endsWith(ext, Qt::CaseInsensitive)) return;
-        if (!cores.contains(name)) cores << name;
+        for (const RemoteCoreInfo& existing : cores) {
+            if (existing.name.compare(name, Qt::CaseInsensitive) == 0) return;
+        }
+        RemoteCoreInfo info;
+        info.name = name;
+        info.size = size;
+        info.url = url.isValid() ? url
+                                 : QUrl(baseUrl + QString::fromLatin1(QUrl::toPercentEncoding(name)));
+        cores.append(info);
     };
 
     const HttpResult api = httpFetch(
@@ -936,7 +1134,12 @@ QStringList Worker::fetchCoresList() {
         const QJsonDocument doc = QJsonDocument::fromJson(api.body, &pe);
         if (pe.error == QJsonParseError::NoError && doc.isArray()) {
             const QJsonArray arr = doc.array();
-            for (const QJsonValue& v : arr) add(v.toObject().value(QStringLiteral("name")).toString());
+            for (const QJsonValue& v : arr) {
+                const QJsonObject obj = v.toObject();
+                add(obj.value(QStringLiteral("name")).toString(),
+                    obj.value(QStringLiteral("size")).toVariant().toLongLong(),
+                    QUrl(obj.value(QStringLiteral("download_url")).toString()));
+            }
         }
     } else if (!m_cancel.load()) {
         emit log("Warning: GitHub API request failed (" + api.error + "). Trying HTML page...");
@@ -952,7 +1155,7 @@ QStringList Worker::fetchCoresList() {
                 QRegularExpression::CaseInsensitiveOption);
             const QString text = QString::fromUtf8(html.body);
             QRegularExpressionMatchIterator it = re.globalMatch(text);
-            while (it.hasNext()) add(it.next().captured(1));
+            while (it.hasNext()) add(it.next().captured(1), 0, QUrl());
         } else if (!m_cancel.load()) {
             emit log("Error: Failed to connect to GitHub repository '" + coresRepo() + "' (" + html.error + ").");
         }
@@ -1175,10 +1378,25 @@ void Worker::doDownload(const Params& p) {
         return;
     }
 
+    if (p.prepareCores) {
+        prepareCores(p, m);
+        emit log(QStringLiteral("Download summary: firmware=%1, extra=%2, cores=prepared.")
+                    .arg(p.updateFirmware ? QStringLiteral("done") : QStringLiteral("skipped"),
+                         p.updateExtra
+                             ? (QFile::exists(wd + QStringLiteral("/extra/") + kExtraCompleteMarker)
+                                    ? QStringLiteral("done") : QStringLiteral("failed"))
+                             : QStringLiteral("skipped")));
+        return;
+    }
+    if (p.downloadSelectedCores) {
+        downloadSelectedCores(p, m);
+        return;
+    }
+
     emit log(QStringLiteral("Fetching actual cores list from GitHub repository..."));
     QElapsedTimer listTimer;
     listTimer.start();
-    const QStringList cores = fetchCoresList();
+    const QList<RemoteCoreInfo> cores = fetchCoresList();
     emit logVerbose("Cores list request took " + QString::number(listTimer.elapsed() / 1000.0, 'f', 1) + " s.");
     if (m_cancel.load()) {
         emit log(QStringLiteral("Operation cancelled by user."));
@@ -1197,13 +1415,12 @@ void Worker::doDownload(const Params& p) {
         return;
     }
 
-    const QString baseUrl = "https://raw.githubusercontent.com/andykarpov/" + coresRepo() + "/master/cores/";
     QList<DownloadJob> jobs;
-    for (const QString& core : cores) {
+    for (const RemoteCoreInfo& core : cores) {
         DownloadJob j;
-        j.url = QUrl(baseUrl + QString::fromLatin1(QUrl::toPercentEncoding(core)));
-        j.dest = coresDir + "/" + core;
-        j.name = core;
+        j.url = core.url;
+        j.dest = coresDir + "/" + core.name;
+        j.name = core.name;
         jobs.append(j);
     }
 
@@ -1240,13 +1457,13 @@ void Worker::doDownload(const Params& p) {
         if (!results.at(i).ok) continue;
         CoreFileInfo ci;
         QString why;
-        const CoreParseResult result = parseCoreFile(coresDir + "/" + cores.at(i), board, &ci, &why);
+        const CoreParseResult result = parseCoreFile(coresDir + "/" + cores.at(i).name, board, &ci, &why);
         if (result == CoreParseResult::NotForBoard) {   // например, pong.kg для Mini
-            notForBoardCores << cores.at(i);
+            notForBoardCores << cores.at(i).name;
             continue;
         }
         if (result == CoreParseResult::Error) {
-            parseErrors.append(qMakePair(cores.at(i), why));
+            parseErrors.append(qMakePair(cores.at(i).name, why));
             continue;
         }
         parsedCores << ci;
@@ -1293,54 +1510,10 @@ void Worker::doDownload(const Params& p) {
         }
     }
 
-    QVariantList rows;
-    for (const CoreFileInfo& ci : parsedCores) {
-        QVariantMap row;
-        row.insert(QStringLiteral("file"), ci.fileName);
-        row.insert(QStringLiteral("downloaded"), ci.build);
-
-        QString state;
-        if (!installedKnown) {
-            row.insert(QStringLiteral("installed"), QStringLiteral("unknown"));
-            state = QStringLiteral("unknown");
-        } else {
-            auto it = installedByFile.constFind(ci.fileName.toLower());
-            if (it == installedByFile.constEnd()) {
-                it = installedById.constFind(ci.id.toLower());
-            }
-            if (it == installedByFile.constEnd()) {
-                row.insert(QStringLiteral("installed"), QStringLiteral("not installed"));
-                state = QStringLiteral("newer");
-            } else {
-                const QString installedBuild = it.value();
-                row.insert(QStringLiteral("installed"), installedBuild);
-                const int cmp = compareCoreBuilds(installedBuild, ci.build);
-                state = cmp < 0 ? QStringLiteral("newer")
-                                : (cmp == 0 ? QStringLiteral("same") : QStringLiteral("older"));
-            }
-        }
-        row.insert(QStringLiteral("state"), state);
-        rows.append(row);
-    }
-    for (const QString& file : notForBoardCores) {
-        QVariantMap row;
-        row.insert(QStringLiteral("file"), file);
-        row.insert(QStringLiteral("state"), QStringLiteral("notSupported"));
-        rows.append(row);
-    }
-    for (const auto& e : parseErrors) {
-        QVariantMap row;
-        row.insert(QStringLiteral("file"), e.first);
-        row.insert(QStringLiteral("detail"), e.second);
-        row.insert(QStringLiteral("state"), QStringLiteral("parseError"));
-        rows.append(row);
-    }
-    std::sort(rows.begin(), rows.end(), [](const QVariant& a, const QVariant& b) {
-        return a.toMap().value(QStringLiteral("file")).toString().toLower() <
-               b.toMap().value(QStringLiteral("file")).toString().toLower();
-    });
+    const QVariantList rows = buildCoreRows(parsedCores, notForBoardCores, parseErrors,
+                                            installedByFile, installedById, installedKnown);
     if (!rows.isEmpty()) {
-        emit coreVersionsReady(rows, m.name, installedKnown);
+        emit coreVersionsReady(rows, m.name, installedKnown, false);
     }
 
     if (p.updateFirmware || p.updateCores) emitFirmwareStatus(p.modelIndex);
@@ -1367,6 +1540,204 @@ void Worker::doDownload(const Params& p) {
                      okCount == cores.size()
                          ? QStringLiteral("done")
                          : QStringLiteral("incomplete (%1/%2)").arg(okCount).arg(cores.size())));
+}
+
+// Подготовка списка ядер: с GitHub читаются только заголовки .kg (первые
+// 64 КБ каждого файла), поэтому версии известны без скачивания всех ядер.
+void Worker::prepareCores(const Params& p, const ModelInfo& m) {
+    const QString wd = workDir();
+    const QString coresDir = wd + QStringLiteral("/cores");
+    const int board = p.modelIndex + 1;     // 1 Go, 2 Mini, 3 Mini G
+
+    emit log(QStringLiteral("Fetching core list and versions from GitHub (headers only)..."));
+    QElapsedTimer listTimer;
+    listTimer.start();
+    const QList<RemoteCoreInfo> remote = fetchCoresList();
+    emit logVerbose("Cores list request took " + QString::number(listTimer.elapsed() / 1000.0, 'f', 1) + " s.");
+    if (m_cancel.load()) {
+        emit log(QStringLiteral("Operation cancelled by user."));
+        return;
+    }
+    if (remote.isEmpty()) {
+        emit log(QStringLiteral("Warning: Could not get the cores list from GitHub."));
+        return;
+    }
+
+    QList<QUrl> headerUrls;
+    headerUrls.reserve(remote.size());
+    for (const RemoteCoreInfo& core : remote) headerUrls << core.url;
+
+    QElapsedTimer headerTimer;
+    headerTimer.start();
+    const QList<RangeResult> headers = fetchRanges(headerUrls, kCoreHeaderBytes, 8);
+    if (m_cancel.load()) {
+        emit log(QStringLiteral("Operation cancelled by user."));
+        return;
+    }
+
+    QList<CoreFileInfo> parsedCores;
+    QStringList notForBoardCores;
+    QList<QPair<QString, QString>> parseErrors;
+    for (int i = 0; i < remote.size(); ++i) {
+        const RemoteCoreInfo& file = remote.at(i);
+        const RangeResult& header = headers.at(i);
+        if (!header.ok) {
+            parseErrors.append(qMakePair(file.name,
+                                         QStringLiteral("header download failed: ") + header.error));
+            continue;
+        }
+
+        CoreFileInfo ci;
+        QString why;
+        const qint64 fileSize = file.size > 0 ? file.size : header.totalSize;
+        const CoreParseResult result =
+            parseCoreHeaderData(header.body, fileSize, board, &ci, &why);
+        if (result == CoreParseResult::NotForBoard) {
+            notForBoardCores << file.name;
+            continue;
+        }
+        if (result == CoreParseResult::Error) {
+            parseErrors.append(qMakePair(file.name, why));
+            continue;
+        }
+        ci.fileName = file.name;
+        parsedCores << ci;
+        emit logVerbose(QStringLiteral("Remote core %1: %2 [%3], build %4.")
+                            .arg(ci.fileName, ci.name, ci.id, ci.build));
+    }
+
+    if (!(m_deviceCoresValid && m_deviceCoresBoard == board) && !p.portLocation.isEmpty()) {
+        queryCoreList(p.portLocation, board, nullptr);
+    }
+    const bool installedKnown = m_deviceCoresValid && m_deviceCoresBoard == board;
+    QHash<QString, QString> installedByFile;
+    QHash<QString, QString> installedById;
+    if (installedKnown) {
+        for (const CoreFileInfo& ci : m_deviceCores) {
+            installedByFile.insert(ci.fileName.toLower(), ci.build);
+            installedById.insert(ci.id.toLower(), ci.build);
+        }
+    }
+
+    const QVariantList rows = buildCoreRows(parsedCores, notForBoardCores, parseErrors,
+                                            installedByFile, installedById, installedKnown);
+    if (rows.isEmpty()) {
+        emit log(QStringLiteral("Warning: No core headers could be parsed."));
+        return;
+    }
+
+    // Старый marker больше не соответствует новому выбору: до скачивания
+    // выбранных ядер FLASH с обновлением ядер должен быть недоступен.
+    QFile::remove(coresDir + "/" + kCoresCompleteMarker);
+    emit coreVersionsReady(rows, m.name, installedKnown, true);
+
+    const QString notForBoardNote = notForBoardCores.isEmpty()
+        ? QString()
+        : QStringLiteral(", %1 not for this board").arg(notForBoardCores.size());
+    if (!parseErrors.isEmpty()) {
+        QStringList details;
+        for (const auto& e : parseErrors) details << e.first + ": " + e.second;
+        emit logVerbose(QStringLiteral("Core header errors: %1").arg(details.join(QStringLiteral("; "))));
+        emit log(QStringLiteral("Warning: Could not read %1 core header(s); they are shown in red.")
+                     .arg(parseErrors.size()));
+    }
+    emit log(QStringLiteral("Core list ready: %1 available%2, headers read in %3 s. "
+                            "Select cores and press 'Download selected'.")
+                 .arg(parsedCores.size())
+                 .arg(notForBoardNote)
+                 .arg(headerTimer.elapsed() / 1000.0, 0, 'f', 1));
+    if (p.updateFirmware || p.updateCores) emitFirmwareStatus(p.modelIndex);
+}
+
+// Скачивание только выбранных пользователем ядер. Полные .kg больше не
+// загружаются для всего набора.
+void Worker::downloadSelectedCores(const Params& p, const ModelInfo& m) {
+    Q_UNUSED(m);
+    const QString wd = workDir();
+    const QString coresDir = wd + QStringLiteral("/cores");
+    const int board = p.modelIndex + 1;
+    const QString ext = coresExt();
+    const QString baseUrl = "https://raw.githubusercontent.com/andykarpov/" + coresRepo() + "/master/cores/";
+
+    QStringList selected;
+    for (const QString& raw : p.selectedCoreFiles) {
+        const QString name = QFileInfo(raw).fileName();
+        if (!isSafeFileName(name) || !name.endsWith(ext, Qt::CaseInsensitive)) continue;
+        if (!selected.contains(name, Qt::CaseInsensitive)) selected << name;
+    }
+    if (selected.isEmpty()) {
+        emit log(QStringLiteral("Error: No cores are selected for download. Check at least one core in "
+                                "the versions window."));
+        return;
+    }
+
+    emit log(QStringLiteral("Downloading selected cores: %1 file(s)...").arg(selected.size()));
+    QFile::remove(coresDir + "/" + kCoresCompleteMarker);
+    QDir(coresDir).removeRecursively();
+    if (!QDir().mkpath(coresDir)) {
+        emit log(QStringLiteral("Error: Cannot create temp folder for cores."));
+        return;
+    }
+
+    QList<DownloadJob> jobs;
+    for (const QString& name : selected) {
+        DownloadJob j;
+        j.url = QUrl(baseUrl + QString::fromLatin1(QUrl::toPercentEncoding(name)));
+        j.dest = coresDir + "/" + name;
+        j.name = name;
+        jobs.append(j);
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+    const QList<JobResult> results = downloadFiles(jobs, 4);
+    if (m_cancel.load()) {
+        emit log(QStringLiteral("Operation cancelled by user."));
+        return;
+    }
+
+    int okCount = 0;
+    int parsedCount = 0;
+    qint64 totalBytes = 0;
+    for (const JobResult& r : results) {
+        if (!r.ok) continue;
+        ++okCount;
+        totalBytes += r.bytes;
+    }
+    for (const QString& name : selected) {
+        CoreFileInfo ci;
+        QString why;
+        if (parseCoreFile(coresDir + "/" + name, board, &ci, &why) == CoreParseResult::Ok) {
+            ++parsedCount;
+            emit logVerbose(QStringLiteral("Downloaded core %1: %2 [%3], build %4.")
+                                .arg(ci.fileName, ci.name, ci.id, ci.build));
+        } else if (!why.isEmpty()) {
+            emit logVerbose(QStringLiteral("Downloaded core %1 header: %2.").arg(name, why));
+        }
+    }
+
+    const double secs = timer.elapsed() / 1000.0;
+    const qint64 speedKb = secs > 0.0 ? static_cast<qint64>(totalBytes / 1024.0 / secs) : 0;
+    emit log(QStringLiteral("Selected cores downloaded: %1/%2 (%3 KB in %4 s, %5 KB/s), parsed: %6.")
+                 .arg(okCount)
+                 .arg(selected.size())
+                 .arg(totalBytes / 1024)
+                 .arg(secs, 0, 'f', 1)
+                 .arg(speedKb)
+                 .arg(parsedCount));
+
+    if (okCount == selected.size()) {
+        QFile marker(coresDir + "/" + kCoresCompleteMarker);
+        if (!marker.open(QIODevice::WriteOnly)) {
+            emit log("Warning: Could not create the completion marker (" + marker.errorString() +
+                     "). Flashing with 'Update cores' will be refused.");
+        }
+    } else {
+        emit log(QStringLiteral("Warning: Selected cores set is incomplete. Flashing with 'Update cores' "
+                                "will be refused until all selected cores download."));
+    }
+
+    if (p.updateFirmware || p.updateCores) emitFirmwareStatus(p.modelIndex);
 }
 
 // ----------------------------------------------------------------------------
@@ -2215,16 +2586,23 @@ void Worker::doFlash(const Params& p) {
                 return;
             }
             // Игнорируемые release-ядра не копируются, а их старые файлы
-            // переносятся в backup. Пользовательские ядра, которых нет в наборе
-            // GitHub, не трогаем: ignoredReleaseCores пересекается с newCores.
+            // переносятся в backup. Список релизных имён берём из панели
+            // (knownCoreFiles): ignored-ядро может быть вообще не скачано,
+            // но его старую версию с карты всё равно нужно убрать.
             if (!p.ignoredCoreFiles.isEmpty()) {
-                QSet<QString> downloadedNames;
-                for (const QString& path : newCores) {
-                    downloadedNames.insert(QFileInfo(path).fileName().toLower());
+                QSet<QString> releaseNames;
+                for (const QString& name : p.knownCoreFiles) {
+                    const QString key = QFileInfo(name).fileName().toLower();
+                    if (!key.isEmpty()) releaseNames.insert(key);
+                }
+                if (releaseNames.isEmpty()) {
+                    for (const QString& path : newCores) {
+                        releaseNames.insert(QFileInfo(path).fileName().toLower());
+                    }
                 }
                 for (const QString& name : p.ignoredCoreFiles) {
                     const QString key = QFileInfo(name).fileName().toLower();
-                    if (downloadedNames.contains(key)) ignoredReleaseCores.insert(key);
+                    if (releaseNames.contains(key)) ignoredReleaseCores.insert(key);
                 }
                 if (!ignoredReleaseCores.isEmpty()) {
                     QStringList filtered;
@@ -2247,8 +2625,17 @@ void Worker::doFlash(const Params& p) {
             // установленном флаге — это осознанный выбор пользователя, а не "все".
             if (p.coreSelectionSet) {
                 QSet<QString> selected;
-                for (const QString& name : p.selectedCoreFiles) {
-                    selected.insert(QFileInfo(name).fileName().toLower());
+                QStringList missing;
+                for (const QString& raw : p.selectedCoreFiles) {
+                    const QString name = QFileInfo(raw).fileName();
+                    selected.insert(name.toLower());
+                    if (!QFile::exists(coresDir + "/" + name)) missing << name;
+                }
+                if (!missing.isEmpty()) {
+                    emit log(QStringLiteral("Error: Selected core(s) are not downloaded: %1. "
+                                            "Press 'Download selected' in the core list first.")
+                                 .arg(missing.join(QStringLiteral(", "))));
+                    return;
                 }
                 QStringList filtered;
                 for (const QString& path : newCores) {

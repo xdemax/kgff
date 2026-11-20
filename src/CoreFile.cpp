@@ -8,6 +8,7 @@
 #include <QtEndian>
 
 #include <cstring>
+#include <functional>
 
 namespace {
 
@@ -48,24 +49,24 @@ struct Section {
 
 }  // namespace
 
-CoreParseResult parseCoreFile(const QString& path, int board, CoreFileInfo* info, QString* why) {
+// Общий разбор kgo2: чтение идёт через readAt(offset, length, out). Так один и
+// тот же код работает и с полным файлом, и с первыми килобайтами HTTP Range.
+using ReadAt = std::function<bool(quint32 offset, quint32 length, QByteArray* out)>;
+
+static CoreParseResult parseCoreImpl(qint64 fileSize, const ReadAt& readAt, int board,
+                                     CoreFileInfo* info, QString* why) {
     if (why) why->clear();
     if (!info) return fail(why, QStringLiteral("no result structure"));
     *info = CoreFileInfo();
-    info->fileName = QFileInfo(path).fileName();
-
-    if (board < 1 || board > 3) return fail(why, QStringLiteral("unsupported board id"));
     info->board = board;
 
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        return fail(why, QStringLiteral("cannot open file: ") + file.errorString());
-    }
-    const qint64 fileSize = file.size();
+    if (board < 1 || board > 3) return fail(why, QStringLiteral("unsupported board id"));
     if (fileSize < kHeaderSize) return fail(why, QStringLiteral("file is smaller than the kgo2 header"));
 
-    const QByteArray header = file.read(kHeaderSize);
-    if (header.size() != kHeaderSize) return fail(why, QStringLiteral("cannot read the kgo2 header"));
+    QByteArray header;
+    if (!readAt(0, kHeaderSize, &header) || header.size() != kHeaderSize) {
+        return fail(why, QStringLiteral("cannot read the kgo2 header"));
+    }
     if (std::memcmp(header.constData(), "kgo2", 4) != 0) {
         return fail(why, QStringLiteral("not a kgo2 file (signature mismatch)"));
     }
@@ -87,9 +88,11 @@ CoreParseResult parseCoreFile(const QString& path, int board, CoreFileInfo* info
     if (tableBytes > kMaxTableBytes || tableBytes > fileSize - headerSize) {
         return fail(why, QStringLiteral("truncated section table"));
     }
-    if (!file.seek(headerSize)) return fail(why, QStringLiteral("cannot seek to the section table"));
-    const QByteArray table = file.read(tableBytes);
-    if (table.size() != tableBytes) return fail(why, QStringLiteral("cannot read the section table"));
+    QByteArray table;
+    if (!readAt(headerSize, static_cast<quint32>(tableBytes), &table) ||
+        table.size() != tableBytes) {
+        return fail(why, QStringLiteral("cannot read the section table"));
+    }
 
     Section sections[kSecCount];
     const quint16 boardBit = static_cast<quint16>(1u << board);
@@ -131,18 +134,19 @@ CoreParseResult parseCoreFile(const QString& path, int board, CoreFileInfo* info
     if (stringsSec.length > 1024u * 1024u) {
         return fail(why, QStringLiteral("STRINGS section is too large"));
     }
-    if (!file.seek(stringsSec.offset)) return fail(why, QStringLiteral("cannot seek to STRINGS"));
-    const QByteArray strings = file.read(stringsSec.length);
-    if (strings.size() != static_cast<int>(stringsSec.length)) {
+    QByteArray strings;
+    if (!readAt(stringsSec.offset, stringsSec.length, &strings) ||
+        strings.size() != static_cast<int>(stringsSec.length)) {
         return fail(why, QStringLiteral("cannot read STRINGS"));
     }
 
     const Section& coreSec = sections[kSecCore];
     if (coreSec.length < kCoreSize) return fail(why, QStringLiteral("CORE section is too short"));
     const int coreBytes = coreSec.length >= kCoreSizeLink ? kCoreSizeLink : kCoreSize;
-    if (!file.seek(coreSec.offset)) return fail(why, QStringLiteral("cannot seek to CORE"));
-    const QByteArray core = file.read(coreBytes);
-    if (core.size() != coreBytes) return fail(why, QStringLiteral("cannot read CORE"));
+    QByteArray core;
+    if (!readAt(coreSec.offset, coreBytes, &core) || core.size() != coreBytes) {
+        return fail(why, QStringLiteral("cannot read CORE"));
+    }
 
     const quint16 recordSize = le16(core.constData());
     if (recordSize < kCoreSize || recordSize > coreSec.length) {
@@ -175,6 +179,45 @@ CoreParseResult parseCoreFile(const QString& path, int board, CoreFileInfo* info
                      : 1;
     if (sections[kSecBitstreamLink2].present) info->link = 2;
     return CoreParseResult::Ok;
+}
+
+CoreParseResult parseCoreFile(const QString& path, int board, CoreFileInfo* info, QString* why) {
+    if (why) why->clear();
+    if (!info) return fail(why, QStringLiteral("no result structure"));
+    *info = CoreFileInfo();
+    info->fileName = QFileInfo(path).fileName();
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return fail(why, QStringLiteral("cannot open file: ") + file.errorString());
+    }
+    const qint64 fileSize = file.size();
+    const ReadAt readAt = [&](quint32 offset, quint32 length, QByteArray* out) -> bool {
+        if (!file.seek(offset)) return false;
+        *out = file.read(length);
+        return out->size() == static_cast<int>(length);
+    };
+    const CoreParseResult result = parseCoreImpl(fileSize, readAt, board, info, why);
+    info->fileName = QFileInfo(path).fileName();
+    return result;
+}
+
+CoreParseResult parseCoreHeaderData(const QByteArray& data, qint64 fileSize, int board,
+                                    CoreFileInfo* info, QString* why) {
+    if (why) why->clear();
+    if (!info) return fail(why, QStringLiteral("no result structure"));
+    *info = CoreFileInfo();
+    info->board = board;
+
+    if (fileSize <= 0) fileSize = data.size();
+    const ReadAt readAt = [&](quint32 offset, quint32 length, QByteArray* out) -> bool {
+        const quint64 off = offset;
+        const quint64 len = length;
+        if (off + len > static_cast<quint64>(data.size())) return false;
+        *out = data.mid(static_cast<int>(off), static_cast<int>(len));
+        return out->size() == static_cast<int>(length);
+    };
+    return parseCoreImpl(fileSize, readAt, board, info, why);
 }
 
 int compareCoreBuilds(const QString& installed, const QString& downloaded) {

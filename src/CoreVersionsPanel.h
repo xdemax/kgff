@@ -6,6 +6,7 @@
 
 class QCheckBox;
 class QLabel;
+class QPushButton;
 class QTableWidget;
 class QTimer;
 
@@ -17,17 +18,24 @@ class CoreVersionsPanel : public QWidget {
 public:
     explicit CoreVersionsPanel(QWidget* parent = nullptr);
 
-    void setRows(const QVariantList& rows, const QString& boardName, bool installedKnown);
+    void setRows(const QVariantList& rows, const QString& boardName, bool installedKnown,
+                 bool availableList);
     void clear();
     bool hasRows() const;
 
     // Имена файлов, отмеченных для копирования на SD-карту.
     QStringList selectedFiles() const;
+    // Все имена ядер в текущем списке (включая нескачанные): нужны, чтобы
+    // отличить релизное ядро от пользовательского при переносе в backup.
+    QStringList allFiles() const;
     // Постоянно игнорируемые ядра (третье состояние точки).
     QStringList ignoredFiles() const;
     // Статус прошивки платы относительно последней сборки на GitHub.
     void setFirmwareStatus(bool known, bool needsUpdate,
                            const QString& installed, const QString& latest);
+
+signals:
+    void downloadSelectedRequested();
 
 private:
     enum class AllMode { All, None, New, Custom };
@@ -44,9 +52,11 @@ private:
     QTableWidget* m_table = nullptr;
     QCheckBox* m_all = nullptr;
     QLabel* m_count = nullptr;
+    QPushButton* m_downloadSelected = nullptr;
     QTimer* m_blinkTimer = nullptr;
     bool m_blinkOn = false;
     bool m_needsUpdate = false;
+    bool m_availableMode = false;   // true: список с GitHub, полные ядра ещё не скачаны
     AllMode m_allMode = AllMode::New;
     int m_newTotal = 0;         // сколько ядер вообще можно считать «новыми»
     QVariantList m_rows;        // исходные данные строк для перерисовки

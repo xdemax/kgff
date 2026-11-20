@@ -352,6 +352,8 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     connect(m_detectBtn, &QPushButton::clicked, this, &MainWindow::onDetectModel);
     connect(m_worker, &Worker::modelDetected, this, &MainWindow::onModelDetected);
     connect(m_worker, &Worker::portsChanged, this, &MainWindow::onRefreshPorts);
+    connect(m_corePanel, &CoreVersionsPanel::downloadSelectedRequested,
+            this, &MainWindow::onDownloadSelectedCores);
     connect(m_comCombo, &QComboBox::currentIndexChanged, this, [this](int) {
         updateActionState();
         updatePortPolling();
@@ -370,6 +372,10 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
         // недоступна, поэтому старый выбор сбрасываем.
         if (m_corePanel && m_corePanel->hasRows()) {
             m_corePanel->clear();
+            m_coreListPrepared = false;
+            // Старый набор ядер относится к прежней модели: без нового
+            // скачивания FLASH с обновлением ядер запускать нельзя.
+            QFile::remove(workDir() + QStringLiteral("/cores/download_complete.txt"));
             hideCorePanel();
             appendLog(QStringLiteral("Device model changed; the core selection was reset. Download the cores "
                                      "again to choose what to update."));
@@ -481,6 +487,7 @@ Params MainWindow::collectParams() const {
     p.coreSelectionSet = hasCoreRows;
     p.selectedCoreFiles = hasCoreRows ? m_corePanel->selectedFiles() : QStringList();
     p.ignoredCoreFiles = m_corePanel ? m_corePanel->ignoredFiles() : QStringList();
+    p.knownCoreFiles = m_corePanel ? m_corePanel->allFiles() : QStringList();
     return p;
 }
 
@@ -536,15 +543,35 @@ void MainWindow::updateActionState() {
 // ----------------------------------------------------------------------------
 void MainWindow::onDownload() {
     if (m_busy) return;
-    // Новое скачивание ядер заново выставит выбор в панели сравнения.
-    if (m_coresChk->isChecked()) {
-        m_corePanel->clear();
-        hideCorePanel();
-    }
     setBusy(true);
     m_downloadBtn->setText(tr("Downloading..."));
-    const Params p = collectParams();
+    Params p = collectParams();
+    // Ядра качаются в два шага: сначала с GitHub читаются только заголовки
+    // для списка версий, затем панель скачивает полные файлы выбранных ядер.
+    if (p.updateCores) p.prepareCores = true;
     m_worker->clearCancel();        // сброс в GUI-потоке до постановки задачи в очередь
+    QMetaObject::invokeMethod(m_worker, [w = m_worker, p]() { w->runDownload(p); }, Qt::QueuedConnection);
+}
+
+void MainWindow::onDownloadSelectedCores() {
+    if (m_busy || !m_coreListPrepared || !m_corePanel) return;
+    const QStringList selected = m_corePanel->selectedFiles();
+    if (selected.isEmpty()) {
+        appendLog(QStringLiteral("Error: No cores are selected. Check at least one core in the list."));
+        return;
+    }
+
+    setBusy(true);
+    m_downloadBtn->setText(tr("Downloading..."));
+    Params p = collectParams();
+    p.updateFirmware = false;
+    p.updateExtra = false;
+    p.updateCores = true;
+    p.prepareCores = false;
+    p.downloadSelectedCores = true;
+    p.coreSelectionSet = true;
+    p.selectedCoreFiles = selected;
+    m_worker->clearCancel();
     QMetaObject::invokeMethod(m_worker, [w = m_worker, p]() { w->runDownload(p); }, Qt::QueuedConnection);
 }
 
@@ -842,9 +869,10 @@ void MainWindow::onConfirmUnrecognizedDrive(const QString& node, const QString& 
 }
 
 void MainWindow::onCoreVersionsReady(const QVariantList& rows, const QString& boardName,
-                                     bool installedKnown) {
-    m_corePanel->setRows(rows, boardName, installedKnown);
-    showCorePanel();        // после парсинга панель раскрывается сама
+                                     bool installedKnown, bool availableList) {
+    m_coreListPrepared = availableList;
+    m_corePanel->setRows(rows, boardName, installedKnown, availableList);
+    showCorePanel();        // после подготовки/парсинга панель раскрывается сама
 }
 
 void MainWindow::onFirmwareStatusReady(bool known, bool needsUpdate,

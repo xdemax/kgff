@@ -34,6 +34,13 @@ struct Params {
     bool coreSelectionSet = false;
     QStringList selectedCoreFiles;
     QStringList ignoredCoreFiles;   // постоянный список игнорируемых ядер
+    // Все ядра из текущего релиза (даже не скачанные): по ним понятно, какие
+    // старые файлы считаются релизными и могут быть перенесены в backup.
+    QStringList knownCoreFiles;
+    // Двухшаговое скачивание ядер: сначала только заголовки/версии, затем
+    // полные файлы лишь для выбранных пользователем ядер.
+    bool prepareCores = false;
+    bool downloadSelectedCores = false;
 };
 
 // Фоновый исполнитель. Живёт в отдельном QThread, управляется из GUI через
@@ -63,9 +70,12 @@ signals:
     void portAccessDenied(const QString& portLocation); // нет прав на порт (Linux)
     void openFolder(const QString& path);               // открыть папку в файловом менеджере
     void modelDetected(int modelIndex, const QString& raw); // ответ на AT+KARABAS=version
-    // Строки сравнения версий: file, installed, downloaded, state (same/newer/older/
-    // missing/unknown/notSupported/parseError), detail. Показывается после скачивания ядер.
-    void coreVersionsReady(const QVariantList& rows, const QString& boardName, bool installedKnown);
+    // Строки сравнения версий: file, installed, downloaded (доступная версия),
+    // state (same/newer/older/missing/unknown/notSupported/parseError), detail.
+    // availableList=true: версии прочитаны из заголовков на GitHub, полные файлы
+    // ещё не скачаны; false: список построен после полного скачивания.
+    void coreVersionsReady(const QVariantList& rows, const QString& boardName, bool installedKnown,
+                           bool availableList);
     // Проверка версий на старте закончена (успешно или нет) — можно запускать
     // обычное автоопределение модели.
     void startupFirmwareCheckFinished();
@@ -100,6 +110,19 @@ private:
         qint64 bytes = 0;
     };
 
+    struct RemoteCoreInfo {
+        QString name;
+        qint64 size = 0;
+        QUrl url;
+    };
+
+    struct RangeResult {
+        bool ok = false;
+        QByteArray body;
+        qint64 totalSize = -1;
+        QString error;
+    };
+
     void guarded(const std::function<void()>& fn);
     bool pause(int ms);                                 // false, если запрошена отмена
 
@@ -110,10 +133,14 @@ private:
     // Параллельная загрузка нескольких файлов через ОДИН QNetworkAccessManager
     // (общее соединение, до maxParallel файлов одновременно).
     QList<JobResult> downloadFiles(const QList<DownloadJob>& jobs, int maxParallel);
+    // Параллельное чтение небольших диапазонов (заголовки .kg) без записи на диск.
+    QList<RangeResult> fetchRanges(const QList<QUrl>& urls, qint64 maxBytes, int maxParallel);
     // Единый список ядер из репозитория karabas-go (общий для всех моделей).
-    QStringList fetchCoresList();
+    QList<RemoteCoreInfo> fetchCoresList();
 
     void doDownload(const Params& p);
+    void prepareCores(const Params& p, const ModelInfo& m);
+    void downloadSelectedCores(const Params& p, const ModelInfo& m);
     void doFlash(const Params& p);
     void doOpenSd(const Params& p);
 

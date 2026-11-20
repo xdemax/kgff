@@ -15,13 +15,13 @@
 
 ## Что умеет программа
 
-- **Скачивает** актуальные прошивки и ядра из репозитория автора плат на GitHub (`karabas-go`).
+- **Скачивает** актуальные прошивки и только выбранные ядра из репозитория автора плат на GitHub (`karabas-go`). Версии ядер читаются из первых 64 КБ каждого `.kg` по HTTP Range; полные файлы качаются только для отмеченных ядер.
 - **Проверяет актуальную сборку прошивки** по последнему коммиту выбранного файла в каталоге `firmware` на GitHub: при запуске для всех моделей и перед скачиванием прошивки или ядер. Если обновляются ядра, панель показывает состояние прошивки платы: мигающее красное `Firmware needs an update!` или зелёное `Firmware is up to date.` После прошивки статус пересчитывается: версия запрашивается у платы заново.
 - **Проверяет обновление самого флешера** через GitHub Releases. Если доступна новая версия, над кнопкой `Download via GitHub` появляется красная ссылка `New flasher version available`; клик открывает страницу последнего релиза в браузере.
 - **Обновляет прошивку** платы (микроконтроллер RP2040).
 - **Заменяет ядра** (файлы `.kg`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
 - **Читает версии ядер** из заголовков `.kg` (kgo2) для выбранной модели платы и использует их для сравнения; подробный список пишется в файловый журнал при `--log`.
-- **Сравнивает версии с картой** в правой панели главного окна: зелёным — загруженная версия новее, жёлтым — установленная новее, красным — ядро не поддерживается этой платой или его заголовок не читается. Если ядра нет на карте, строка выглядит как `not installed > загруженная версия`. Панель свернута по умолчанию, раскрывается кнопкой **`>>`** и автоматически после парсинга ядер; при раскрытии окно центрируется по итоговой ширине обеих половин. Зелёные ядра отмечены, выбор можно изменить вручную или чекбоксом **All selected** (все / ни одного / только новые). Точка ядра имеет три состояния: обновить → **ignored** → пропустить. В состоянии `ignored` строка становится тёмно-серой, в колонке `Installed` пишется `ignored`, новая версия не копируется, а старая версия с карты переносится в `backup_*`, чтобы этого ядра на карте не осталось. Пользовательские ядра, которых нет в GitHub, при этом не трогаются. Список игнорируемых сохраняется между запусками. Ядро `not supported` по умолчанию красное; при выборе точка становится зелёной, при игнорировании — тёмно-серой, после снятия — снова красной.
+- **Сравнивает версии с картой** в правой панели главного окна: зелёным — доступная версия новее, жёлтым — установленная новее, красным — ядро не поддерживается этой платой или его заголовок не читается. Если ядра нет на карте, строка выглядит как `not installed > доступная версия`. Панель свернута по умолчанию, раскрывается кнопкой **`>>`** и автоматически после парсинга ядер; при раскрытии окно центрируется по итоговой ширине обеих половин. Зелёные ядра отмечены, выбор можно изменить вручную или чекбоксом **All selected** (все / ни одного / только новые). Точка ядра имеет три состояния: обновить → **ignored** → пропустить. В состоянии `ignored` строка становится тёмно-серой, в колонке `Installed` пишется `ignored`, новая версия не копируется, а старая версия с карты переносится в `backup_*`, чтобы этого ядра на карте не осталось. Пользовательские ядра, которых нет в GitHub, при этом не трогаются. Список игнорируемых сохраняется между запусками. Ядро `not supported` по умолчанию красное; при выборе точка становится зелёной, при игнорировании — тёмно-серой, после снятия — снова красной.
 - **Открывает SD-карту платы** как обычный диск, чтобы вы могли работать с её файлами напрямую.
 - **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.zip` на SD-карту. Файлы, которые уже есть на карте, заменяются; остальные файлы пользователя не трогаются. Перед копированием проверяется свободное место, а перед распаковкой — распакованный размер архива (лимит 2 ГБ). Симлинки из архива не копируются. **Сейчас функция временно отключена в интерфейсе.**
 
@@ -44,12 +44,13 @@
    - **Download extra content**: дополнительный контент (ROM-ы, образы дисков и т.п.).
 
    Можно отметить любые галки в любом сочетании.
-4. Нажмите **Download via GitHub**. Программа скачает всё отмеченное. Ядер много, и скорость зависит от вашего интернета;
-   ход загрузки виден в журнале внизу окна. После загрузки ядер программа читает их версии из заголовков `.kg`
-   и раскрывает справа панель сравнения с версиями на карте: `установленная > загруженная`. Зелёные ядра
-   отмечены по умолчанию; точки можно поставить или снять вручную, а чекбокс **All selected** переключает
-   все / ни одного / только новые. Панель можно свернуть кнопкой **`<<`** и снова раскрыть **`>>`**. На карту
-   копируются только отмеченные ядра.
+4. Нажмите **Download via GitHub**. Прошивка скачается сразу, а для ядер программа сначала читает с GitHub только
+   первые 64 КБ каждого `.kg` (около 3 МБ на весь набор) и раскрывает справа панель сравнения:
+   `установленная > доступная`.
+   Зелёные ядра (на карте нет или версия старее) отмечены по умолчанию; выбор можно изменить вручную, а
+   **All selected** переключает все / ни одного / только новые. Затем нажмите **Download selected** — скачаются
+   полные файлы только отмеченных ядер. Панель можно свернуть кнопкой **`<<`** и снова раскрыть **`>>`**.
+   На карту копируются только отмеченные ядра.
 5. В списке **Serial port** выберите порт платы. В списке показываются только USB-устройства; пока порт не выбран,
    программа раз в секунду проверяет, не подключилась ли плата, — нужный порт появляется сам (кнопка
    **Refresh ports** — для ручного обновления). После выбора порта фоновый опрос останавливается. Пункт
@@ -208,14 +209,14 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 
 ### What the program does
 
-- **Downloads** the latest firmware and cores from the board author's GitHub repository (`karabas-go`).
+- **Downloads** the latest firmware and only the selected cores from the board author's GitHub repository (`karabas-go`). Core versions are read from the first 64 KB of each `.kg` via HTTP Range; full core files are downloaded only for the checked items.
 - **Checks the current firmware build** from the latest commit of the selected file in the GitHub `firmware` directory: for all models at startup and before downloading firmware or cores. When cores are updated, the panel shows the board firmware state: a blinking red `Firmware needs an update!` or a green `Firmware is up to date.` After flashing, the status is recalculated: the board firmware version is requested again.
 - **Checks for flasher updates** through GitHub Releases. If a newer version is available, a red `New flasher version available` link appears above the `Download via GitHub` button; clicking it opens the latest release page in the browser.
 - **Copies extra content** (ROMs, disk images, etc.) from the `extra.zip` archive to the SD card. Files that already exist on the card are replaced; other user files are left untouched. Free space is checked before copying, and the unpacked archive size is checked before extraction (2 GB limit). Symbolic links from the archive are not copied. **This feature is temporarily disabled in the UI.**
 - **Updates the board firmware** (RP2040 microcontroller).
 - **Replaces cores** (`.kg` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
 - **Reads core versions** from the `.kg` headers (kgo2) for the selected board model and uses them for comparison; the detailed list goes to the file log with `--log`.
-- **Compares versions with the card** in the right-hand panel of the main window: green means the downloaded version is newer, yellow means the installed version is newer, red means the core is not supported by this board or its header cannot be read. If the core is not on the card, the row shows `not installed > downloaded version`. The panel is collapsed by default, expands with **`>>`** and automatically after core parsing; when expanded, the window is centred using the full width of both halves. Green cores are checked, and the selection can be changed manually or with the **All selected** checkbox (all / none / only new). The core dot has three states: update → **ignored** → skip. An ignored core is dark grey, shows `ignored` in the `Installed` column, the new version is not copied, and the old version on the card is moved to `backup_*` so the core no longer stays on the card. User cores that are not in GitHub are left untouched. The ignore list is kept between runs. A `not supported` core is red by default; selecting turns the dot green, ignoring turns it dark grey, and unchecking turns it red again.
+- **Compares versions with the card** in the right-hand panel of the main window: green means the available version is newer, yellow means the installed version is newer, red means the core is not supported by this board or its header cannot be read. If the core is not on the card, the row shows `not installed > available version`. The panel is collapsed by default, expands with **`>>`** and automatically after core parsing; when expanded, the window is centred using the full width of both halves. Green cores are checked, and the selection can be changed manually or with the **All selected** checkbox (all / none / only new). The core dot has three states: update → **ignored** → skip. An ignored core is dark grey, shows `ignored` in the `Installed` column, the new version is not copied, and the old version on the card is moved to `backup_*` so the core no longer stays on the card. User cores that are not in GitHub are left untouched. The ignore list is kept between runs. A `not supported` core is red by default; selecting turns the dot green, ignoring turns it dark grey, and unchecking turns it red again.
 - **Opens the board's SD card** as a regular drive so you can work with its files directly.
 
 Firmware and cores can be updated together or separately — for example, cores only.
@@ -237,12 +238,12 @@ Firmware and cores can be updated together or separately — for example, cores 
    - **Download extra content**: extra content (ROMs, disk images, etc.).
 
    You can check any combination of these.
-4. Click **Download via GitHub**. The program downloads everything that is checked. There are many cores, and the speed
-   depends on your internet connection; progress is shown in the log at the bottom of the window. After the cores are
-   downloaded, the program reads their versions from the `.kg` headers and expands the comparison panel on the right
-   with the versions on the card: `installed > downloaded`. Green cores are checked by default; change the checkboxes
-   manually or use **All selected** to cycle all / none / only new. Collapse the panel with **`<<`**, expand it again
-   with **`>>`**. Only checked cores are copied to the card.
+4. Click **Download via GitHub**. Firmware is downloaded immediately; for cores the program first reads only the
+   first 64 KB of each `.kg` (about 3 MB for the whole set) and expands the comparison panel on the right:
+   `installed > available`. Green cores (missing on the card or older) are checked by default; change the checkboxes
+   manually or use **All selected** to cycle all / none / only new. Then click **Download selected** — only the full
+   files of the checked cores are downloaded. Collapse the panel with **`<<`**, expand it again with **`>>`**.
+   Only checked cores are copied to the card.
 5. In the **Serial port** list, select the board's port. Only USB devices are shown; while no port is selected,
    the program checks once per second whether the board has been connected, so the required port appears
    automatically (the **Refresh ports** button refreshes it manually). Once a port is selected, the background
