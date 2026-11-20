@@ -560,6 +560,11 @@ void MainWindow::onDownload() {
 
 void MainWindow::onFlash() {
     if (m_busy) return;
+    m_flashStarted = true;
+    m_flashCores = m_coresChk->isChecked();
+    // Правая панель во время FLASH не нужна; после обновления ядер её
+    // содержимое будет сброшено, чтобы не показывать старые Installed.
+    hideCorePanel();
     setBusy(true);
     const Params p = collectParams();
     m_worker->clearCancel();        // сброс в GUI-потоке до постановки задачи в очередь
@@ -941,6 +946,17 @@ void MainWindow::onFirmwareReady(const QString& path) {
 }
 
 void MainWindow::onWorkerFinished() {
+    if (m_flashStarted) {
+        if (m_flashCores) {
+            if (m_corePanel) m_corePanel->clear();
+            m_coreListPrepared = false;
+            // После FLASH старый набор/маркер больше не соответствуют
+            // состоянию карты: следующий список готовится заново.
+            QFile::remove(workDir() + QStringLiteral("/cores/download_complete.txt"));
+        }
+        m_flashStarted = false;
+        m_flashCores = false;
+    }
     setBusy(false);
     if (m_closeRequested) close();
 }

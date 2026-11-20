@@ -50,7 +50,8 @@
    Зелёные ядра (на карте нет или версия старее) отмечены по умолчанию; выбор можно изменить вручную, а
    **All selected** переключает все / ни одного / только новые. Затем нажмите **FLASH!** — перед записью на карту
    флешер сам скачает полные файлы только отмеченных ядер (если их ещё нет в кэше) и сразу запишет их.
-   Панель можно свернуть кнопкой **`<<`** и снова раскрыть **`>>`**.
+   При запуске FLASH правая панель сворачивается, а после обновления ядер очищается, чтобы не показывать
+   старые установленные версии. Панель можно снова раскрыть кнопкой **`>>`**.
    На карту копируются только отмеченные ядра.
 5. В списке **Serial port** выберите порт платы. В списке показываются только USB-устройства; пока порт не выбран,
    программа раз в секунду проверяет, не подключилась ли плата, — нужный порт появляется сам (кнопка
@@ -244,7 +245,8 @@ Firmware and cores can be updated together or separately — for example, cores 
    `installed > available`. Green cores (missing on the card or older) are checked by default; change the checkboxes
    manually or use **All selected** to cycle all / none / only new. Then click **FLASH!** — before writing to the card
    the flasher downloads the full files of the checked cores (only those not already cached) and writes them.
-   Collapse the panel with **`<<`**, expand it again with **`>>`**.
+   When FLASH starts, the right panel collapses; after cores are updated it is cleared so old installed versions
+   are not shown. Expand it again with **`>>`**.
    Only checked cores are copied to the card.
 5. In the **Serial port** list, select the board's port. Only USB devices are shown; while no port is selected,
    the program checks once per second whether the board has been connected, so the required port appears

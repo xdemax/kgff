@@ -105,6 +105,8 @@ private:
     QString m_lastAutoDetectedPort;       // чтобы не повторять автоопределение
     bool m_startupCheckDone = false;
     bool m_coreListPrepared = false;      // список ядер с GitHub уже получен
+    bool m_flashStarted = false;
+    bool m_flashCores = false;            // в запущенном FLASH обновляются ядра
     bool m_busy = false;
     bool m_closeRequested = false;
     bool m_accessRuleInstalled = false;   // правило udev уже ставилось в этом запуске
