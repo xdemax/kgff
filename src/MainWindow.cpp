@@ -754,7 +754,10 @@ bool MainWindow::showRollbackDialog() {
 
     auto* fw = new QCheckBox(
         info.firmwareAvailable
-            ? tr("Firmware: %1 → %2").arg(info.installedBuild, info.targetBuild)
+            ? tr("Firmware: %1 → %2%3").arg(
+                  info.installedBuild.isEmpty() ? tr("unknown") : info.installedBuild,
+                  info.targetBuild,
+                  info.firmwarePath.isEmpty() ? QString() : tr(" (from backup)"))
             : tr("Firmware: not available"),
         &dialog);
     fw->setChecked(info.firmwareAvailable);
@@ -820,6 +823,7 @@ bool MainWindow::showRollbackDialog() {
     p.rollbackFirmware = doFirmware;
     p.rollbackCores = doCores;
     p.rollbackFirmwareUrl = info.targetUrl;
+    p.rollbackFirmwarePath = info.firmwarePath;
     p.rollbackTargetBuild = info.targetBuild;
     p.rollbackBackupName = info.backupName;
     p.coreSelectionSet = false;

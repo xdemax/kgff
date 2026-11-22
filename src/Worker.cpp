@@ -590,6 +590,14 @@ void Worker::runDetectModel(const Params& p) {
         emit log("Detected model: " + models().at(modelIndex).name);
         emitFirmwareStatus(modelIndex);
         emit modelDetected(modelIndex, raw);
+
+        // Кэшируем установленную прошивку заранее: при следующем обновлении
+        // ядер она попадёт в backup, и BACKUP сможет работать без интернета.
+        QString cachedPath;
+        QString cacheError;
+        if (!cacheFirmwareForBackup(modelIndex, firmware, &cachedPath, &cacheError)) {
+            emit logVerbose(QStringLiteral("Could not cache installed firmware: %1").arg(cacheError));
+        }
     });
 }
 
@@ -1292,6 +1300,82 @@ QList<QPair<QString, QString>> Worker::fetchFirmwareRevisions(const QString& fir
     return revisions;
 }
 
+// Скачивает установленную прошивку в локальный кэш заранее, чтобы положить её
+// в backup и потом откатиться без интернета.
+bool Worker::cacheFirmwareForBackup(int modelIndex, const QString& build,
+                                    QString* path, QString* error) {
+    if (path) path->clear();
+    if (error) error->clear();
+    if (modelIndex < 0 || modelIndex >= models().size() || build.trimmed().isEmpty()) {
+        if (error) *error = QStringLiteral("unknown model or firmware build");
+        return false;
+    }
+
+    const QString wd = workDir();
+    const QString cacheDir = wd + QStringLiteral("/firmware_cache");
+    if (!QDir().mkpath(cacheDir)) {
+        if (error) *error = QStringLiteral("cannot create firmware cache folder");
+        return false;
+    }
+    QString safeBuild = build.trimmed();
+    safeBuild.replace(QRegularExpression(QStringLiteral("[^0-9A-Za-z_.-]")), QStringLiteral("_"));
+    const QString dest = cacheDir + QStringLiteral("/model%1_%2.uf2").arg(modelIndex).arg(safeBuild);
+    QString why;
+    if (QFileInfo::exists(dest) && isValidUf2(dest, &why)) {
+        if (path) *path = dest;
+        return true;
+    }
+    if (QFileInfo::exists(dest)) QFile::remove(dest);
+
+    const QString firmwareFile =
+        QFileInfo(QUrl(models().at(modelIndex).firmwareUrl).path()).fileName();
+    QString historyError;
+    const QList<QPair<QString, QString>> revisions =
+        fetchFirmwareRevisions(firmwareFile, &historyError);
+    QString sha;
+    for (const auto& rev : revisions) {
+        if (rev.first == build.trimmed()) {
+            sha = rev.second;
+            break;
+        }
+    }
+    if (sha.isEmpty()) {
+        if (error) *error = historyError.isEmpty()
+            ? QStringLiteral("build %1 was not found in GitHub history").arg(build)
+            : historyError;
+        return false;
+    }
+
+    const QString url = QStringLiteral("https://raw.githubusercontent.com/andykarpov/") +
+                        coresRepo() + QLatin1Char('/') + sha + QStringLiteral("/firmware/") +
+                        QString::fromLatin1(QUrl::toPercentEncoding(firmwareFile));
+    const QString tmp = cacheDir + QStringLiteral("/download.tmp.uf2");
+    QString downloadError;
+    if (!downloadToFile(QUrl(url), tmp, &downloadError)) {
+        if (error) *error = downloadError;
+        return false;
+    }
+    if (!isValidUf2(tmp, &why)) {
+        QFile::remove(tmp);
+        if (error) *error = QStringLiteral("invalid UF2: ") + why;
+        return false;
+    }
+    QFile::remove(dest);
+    if (!QFile::rename(tmp, dest)) {
+        // На всякий случай: некоторые ФС не любят rename поверх границы каталога.
+        if (!QFile::copy(tmp, dest)) {
+            QFile::remove(tmp);
+            if (error) *error = QStringLiteral("cannot save firmware cache: ") + dest;
+            return false;
+        }
+        QFile::remove(tmp);
+    }
+    if (path) *path = dest;
+    emit logVerbose(QStringLiteral("Cached firmware %1 for model %2: %3")
+                        .arg(build, models().at(modelIndex).name, dest));
+    return true;
+}
+
 void Worker::emitFirmwareStatus(int modelIndex) {
     if (modelIndex < 0) modelIndex = m_boardModelIndex;
     const QString latest = m_latestFirmwareVersions.value(modelIndex);
@@ -1865,7 +1949,39 @@ void Worker::doPrepareRollback(const Params& p) {
         info.firmwareError = QStringLiteral("Could not read the installed firmware version.");
     }
 
-    if (!info.installedBuild.isEmpty() && info.modelIndex >= 0 &&
+    QString backupName;
+    int coreCount = 0;
+    QString backupFirmwareBuild;
+    QString backupFirmwarePath;
+    QString backupError;
+    if (findLatestBackupOnSd(p.portLocation, info.modelIndex, &backupName, &coreCount,
+                             &backupFirmwareBuild, &backupFirmwarePath, &backupError)) {
+        info.coresAvailable = true;
+        info.backupName = backupName;
+        info.coreCount = coreCount;
+        emit log(QStringLiteral("BACKUP: cores from %1 (%2 .kg).").arg(backupName).arg(coreCount));
+        if (!backupFirmwarePath.isEmpty() && !backupFirmwareBuild.isEmpty()) {
+            info.firmwareAvailable = true;
+            info.targetBuild = backupFirmwareBuild;
+            info.firmwarePath = backupFirmwarePath;
+            info.targetUrl.clear();
+            info.firmwareError.clear();
+            emit log(QStringLiteral("BACKUP: firmware %1 taken from %2.")
+                         .arg(backupFirmwareBuild, backupName));
+        }
+    } else {
+        info.coresError = backupError;
+    }
+
+    if (m_cancel.load()) {
+        info.firmwareError = QStringLiteral("Cancelled.");
+        info.coresError = QStringLiteral("Cancelled.");
+        emit rollbackPrepared(info);
+        return;
+    }
+
+    // Если в backup прошивки нет — запасной путь: предыдущая сборка из GitHub.
+    if (!info.firmwareAvailable && !info.installedBuild.isEmpty() && info.modelIndex >= 0 &&
         info.modelIndex < models().size()) {
         const QString firmwareFile =
             QFileInfo(QUrl(models().at(info.modelIndex).firmwareUrl).path()).fileName();
@@ -1901,36 +2017,21 @@ void Worker::doPrepareRollback(const Params& p) {
                 ? QStringLiteral("Could not read the firmware history.")
                 : historyError;
         }
-    } else if (!m_cancel.load() && info.firmwareError.isEmpty()) {
+    } else if (!info.firmwareAvailable && !m_cancel.load() && info.firmwareError.isEmpty()) {
         info.firmwareError = QStringLiteral("Installed firmware version is unknown.");
-    }
-
-    if (m_cancel.load()) {
-        info.firmwareError = QStringLiteral("Cancelled.");
-        info.coresError = QStringLiteral("Cancelled.");
-        emit rollbackPrepared(info);
-        return;
-    }
-
-    QString backupName;
-    int coreCount = 0;
-    QString backupError;
-    if (findLatestBackupOnSd(p.portLocation, &backupName, &coreCount, &backupError)) {
-        info.coresAvailable = true;
-        info.backupName = backupName;
-        info.coreCount = coreCount;
-        emit log(QStringLiteral("BACKUP: cores from %1 (%2 .kg).").arg(backupName).arg(coreCount));
-    } else {
-        info.coresError = backupError;
     }
 
     emit rollbackPrepared(info);
 }
 
-bool Worker::findLatestBackupOnSd(const QString& portLocation, QString* backupName,
-                                  int* coreCount, QString* error) {
+bool Worker::findLatestBackupOnSd(const QString& portLocation, int modelIndex,
+                                  QString* backupName, int* coreCount,
+                                  QString* firmwareBuild, QString* firmwarePath,
+                                  QString* error) {
     if (backupName) backupName->clear();
     if (coreCount) *coreCount = 0;
+    if (firmwareBuild) firmwareBuild->clear();
+    if (firmwarePath) firmwarePath->clear();
     if (error) error->clear();
 
     const QSet<QString> before = Platform::readyRemovableDisks();
@@ -1949,20 +2050,74 @@ bool Worker::findLatestBackupOnSd(const QString& portLocation, QString* backupNa
     QStringList backups = root.entryList(QStringList() << QStringLiteral("backup_*"),
                                          QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     std::sort(backups.begin(), backups.end(), std::greater<QString>());
-    bool found = false;
+    QString selectedName;
+    int selectedCount = 0;
+    QString selectedFirmwareBuild;
+    QString selectedFirmwareLocalPath;
     for (const QString& name : backups) {
-        const QStringList files = listFilesWithExt(joinPath(root.absolutePath(), name), coresExt());
-        if (!files.isEmpty()) {
-            if (backupName) *backupName = name;
-            if (coreCount) *coreCount = files.size();
-            found = true;
+        const QString dir = joinPath(root.absolutePath(), name);
+        const QStringList files = listFilesWithExt(dir, coresExt());
+        if (files.isEmpty()) continue;
+        selectedName = name;
+        selectedCount = files.size();
+
+        // Прошивка в backup: предпочитаем manifest, иначе ищем firmware_*.uf2.
+        QJsonObject manifest;
+        QFile manifestFile(joinPath(dir, QStringLiteral("backup.json")));
+        if (manifestFile.open(QIODevice::ReadOnly)) {
+            QJsonParseError pe;
+            const QJsonDocument doc = QJsonDocument::fromJson(manifestFile.readAll(), &pe);
+            if (pe.error == QJsonParseError::NoError && doc.isObject()) manifest = doc.object();
+        }
+        const int manifestModel = manifest.value(QStringLiteral("modelIndex")).toInt(-1);
+        if (modelIndex >= 0 && manifestModel >= 0 && manifestModel != modelIndex) {
+            emit logVerbose(QStringLiteral("Backup %1 belongs to another model; firmware is ignored.")
+                                .arg(name));
             break;
         }
+        QString fwFile = manifest.value(QStringLiteral("firmwareFile")).toString();
+        QString fwBuild = manifest.value(QStringLiteral("firmware")).toString();
+        if (!fwFile.isEmpty() && QFileInfo(fwFile).fileName() != fwFile) fwFile.clear();
+        if (fwFile.isEmpty()) {
+            const QStringList fwFiles = QDir(dir).entryList(QStringList() << QStringLiteral("firmware_*.uf2"),
+                                                            QDir::Files, QDir::Name);
+            if (!fwFiles.isEmpty()) {
+                fwFile = fwFiles.first();
+                static const QRegularExpression fwRe(QStringLiteral("^firmware_(.+)\\.uf2$"),
+                                                     QRegularExpression::CaseInsensitiveOption);
+                const auto m = fwRe.match(fwFile);
+                if (m.hasMatch() && fwBuild.isEmpty()) fwBuild = m.captured(1);
+            }
+        }
+        if (!fwFile.isEmpty()) {
+            const QString source = joinPath(dir, fwFile);
+            if (QFileInfo::exists(source)) {
+                const QString wd = workDir();
+                const QString local = wd + QStringLiteral("/rollback_backup_firmware.uf2");
+                if (!wd.isEmpty() && QDir().mkpath(wd)) {
+                    QFile::remove(local);
+                    if (QFile::copy(source, local)) {
+                        QString why;
+                        if (isValidUf2(local, &why)) {
+                            selectedFirmwareBuild = fwBuild;
+                            selectedFirmwareLocalPath = local;
+                            emit logVerbose(QStringLiteral("Firmware from backup %1: %2")
+                                                .arg(name, fwBuild.isEmpty() ? fwFile : fwBuild));
+                        } else {
+                            emit logVerbose(QStringLiteral("Firmware in backup %1 is invalid: %2")
+                                                .arg(name, why));
+                            QFile::remove(local);
+                        }
+                    }
+                }
+            }
+        }
+        break;
     }
 
     const bool ejected = ejectBestEffort(sd);
     emit portsChanged();   // порт мог переименоваться после MSC
-    if (!found) {
+    if (selectedName.isEmpty()) {
         if (error) *error = QStringLiteral("No non-empty backup_* folder with .kg was found.");
         return false;
     }
@@ -1970,6 +2125,10 @@ bool Worker::findLatestBackupOnSd(const QString& portLocation, QString* backupNa
         if (error) *error = QStringLiteral("SD card could not be ejected after scanning.");
         return false;
     }
+    if (backupName) *backupName = selectedName;
+    if (coreCount) *coreCount = selectedCount;
+    if (firmwareBuild) *firmwareBuild = selectedFirmwareBuild;
+    if (firmwarePath) *firmwarePath = selectedFirmwareLocalPath;
     return true;
 }
 
@@ -2036,28 +2195,34 @@ void Worker::doRollback(const Params& p) {
 
     QString firmwarePath;
     if (p.rollbackFirmware) {
-        if (p.rollbackFirmwareUrl.isEmpty()) {
-            emit log(QStringLiteral("Error: Previous firmware URL is unknown."));
-            return;
-        }
-        const QString wd = workDir();
-        if (!QDir().mkpath(wd)) {
-            emit log(QStringLiteral("Error: Cannot create working directory."));
-            return;
-        }
-        firmwarePath = wd + QStringLiteral("/rollback_firmware.uf2");
-        QString downloadError;
-        if (!downloadToFile(QUrl(p.rollbackFirmwareUrl), firmwarePath, &downloadError)) {
-            emit log(QStringLiteral("Error: Could not download previous firmware: ") + downloadError);
-            return;
-        }
         QString why;
-        if (!isValidUf2(firmwarePath, &why)) {
-            emit log(QStringLiteral("Error: Downloaded previous firmware is not a valid UF2: ") + why);
-            QFile::remove(firmwarePath);
-            return;
+        if (!p.rollbackFirmwarePath.isEmpty() && QFileInfo::exists(p.rollbackFirmwarePath) &&
+            isValidUf2(p.rollbackFirmwarePath, &why)) {
+            firmwarePath = p.rollbackFirmwarePath;
+            emit log(QStringLiteral("Using firmware from backup: %1.").arg(p.rollbackTargetBuild));
+        } else {
+            if (p.rollbackFirmwareUrl.isEmpty()) {
+                emit log(QStringLiteral("Error: Previous firmware file is unavailable."));
+                return;
+            }
+            const QString wd = workDir();
+            if (!QDir().mkpath(wd)) {
+                emit log(QStringLiteral("Error: Cannot create working directory."));
+                return;
+            }
+            firmwarePath = wd + QStringLiteral("/rollback_firmware.uf2");
+            QString downloadError;
+            if (!downloadToFile(QUrl(p.rollbackFirmwareUrl), firmwarePath, &downloadError)) {
+                emit log(QStringLiteral("Error: Could not download previous firmware: ") + downloadError);
+                return;
+            }
+            if (!isValidUf2(firmwarePath, &why)) {
+                emit log(QStringLiteral("Error: Downloaded previous firmware is not a valid UF2: ") + why);
+                QFile::remove(firmwarePath);
+                return;
+            }
+            emit log(QStringLiteral("Previous firmware downloaded: %1.").arg(p.rollbackTargetBuild));
         }
-        emit log(QStringLiteral("Previous firmware downloaded: %1.").arg(p.rollbackTargetBuild));
     }
 
     if (p.rollbackCores) {
@@ -2594,7 +2759,10 @@ void Worker::rollbackCores(const QStringList& copiedNew, const QList<QPair<QStri
 // ----------------------------------------------------------------------------
 Worker::MscResult Worker::updateCoresOnSd(const QString& portLocation, const QStringList& newCores,
                                           bool updateExtra, bool updateFirmware,
-                                          const QSet<QString>& ignoredCores) {
+                                          const QSet<QString>& ignoredCores,
+                                          const QString& backupFirmwarePath,
+                                          const QString& backupFirmwareBuild,
+                                          int backupModelIndex) {
     MscResult result;
     emit log(QStringLiteral("Cores check active. Switching Karabas to SD Card MSC mode (card 1)..."));
 
@@ -2707,6 +2875,52 @@ Worker::MscResult Worker::updateCoresOnSd(const QString& portLocation, const QSt
         ejectBestEffort(sd);
         result.abortReason = QStringLiteral("backup step failed");
         return result;
+    }
+
+    if (!movedOld.isEmpty()) {
+        // Кладём установленную прошивку в backup, чтобы BACKUP мог восстановить её
+        // без интернета. Ошибка копирования не отменяет обновление ядер.
+        QString firmwareName;
+        if (!backupFirmwarePath.isEmpty() && !backupFirmwareBuild.isEmpty() &&
+            QFileInfo::exists(backupFirmwarePath)) {
+            QString safeBuild = backupFirmwareBuild.trimmed();
+            safeBuild.replace(QRegularExpression(QStringLiteral("[^0-9A-Za-z_.-]")), QStringLiteral("_"));
+            firmwareName = QStringLiteral("firmware_") + safeBuild + QStringLiteral(".uf2");
+            const QString firmwareDst = joinPath(backupDir, firmwareName);
+            QString copyError;
+            if (!copyFileSynced(backupFirmwarePath, firmwareDst, &copyError)) {
+                emit log(QStringLiteral("Warning: Could not put firmware into backup: ") + copyError);
+                firmwareName.clear();
+            } else {
+                emit logVerbose(QStringLiteral("Firmware for backup saved: %1").arg(firmwareDst));
+            }
+        }
+
+        QJsonObject manifest;
+        manifest.insert(QStringLiteral("schema"), 1);
+        manifest.insert(QStringLiteral("created"),
+                        QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+        manifest.insert(QStringLiteral("firmware"), backupFirmwareBuild);
+        manifest.insert(QStringLiteral("firmwareFile"), firmwareName);
+        if (backupModelIndex >= 0 && backupModelIndex < models().size()) {
+            manifest.insert(QStringLiteral("model"), models().at(backupModelIndex).name);
+            manifest.insert(QStringLiteral("modelIndex"), backupModelIndex);
+            manifest.insert(QStringLiteral("board"), backupModelIndex + 1);
+        }
+        QJsonArray backupCores;
+        for (const auto& moved : movedOld) backupCores.append(QFileInfo(moved.first).fileName());
+        manifest.insert(QStringLiteral("cores"), backupCores);
+        QSaveFile manifestFile(joinPath(backupDir, QStringLiteral("backup.json")));
+        if (manifestFile.open(QIODevice::WriteOnly)) {
+            manifestFile.write(QJsonDocument(manifest).toJson(QJsonDocument::Indented));
+            if (!manifestFile.commit()) {
+                emit logVerbose(QStringLiteral("Could not save backup manifest: %1")
+                                    .arg(manifestFile.errorString()));
+            }
+        } else {
+            emit logVerbose(QStringLiteral("Could not create backup manifest: %1")
+                                .arg(manifestFile.errorString()));
+        }
     }
 
     // 2) Проверка свободного места: суммарный размер новых ядер + запас 1 МБ
@@ -3018,8 +3232,28 @@ void Worker::doFlash(const Params& p) {
 
         // Один MSC-сеанс: сначала ядра, затем extra (обе операции на карте №1).
         if (p.updateCores) {
+            // Кладём в backup установленную прошивку (до обновления), чтобы
+            // BACKUP мог восстановить её без интернета. При старте она уже
+            // кэшируется, здесь повторяем только если кэша нет.
+            QString backupFirmwarePath;
+            QString backupFirmwareBuild = m_boardFirmwareVersion;
+            if (backupFirmwareBuild.isEmpty() && !p.portLocation.isEmpty()) {
+                QString raw;
+                int board = 0;
+                queryVersion(p.portLocation, &raw, &board, &backupFirmwareBuild);
+            }
+            if (!backupFirmwareBuild.isEmpty()) {
+                QString cacheError;
+                if (!cacheFirmwareForBackup(p.modelIndex, backupFirmwareBuild,
+                                            &backupFirmwarePath, &cacheError)) {
+                    emit log(QStringLiteral("Warning: Firmware was not prepared for backup: ") + cacheError);
+                }
+            }
+
             const MscResult r = updateCoresOnSd(p.portLocation, newCores, p.updateExtra,
-                                                p.updateFirmware, ignoredReleaseCores);
+                                                p.updateFirmware, ignoredReleaseCores,
+                                                backupFirmwarePath, backupFirmwareBuild,
+                                                p.modelIndex);
             coresStatus = r.coresOk ? QStringLiteral("done") : QStringLiteral("failed");
             if (p.updateExtra) {
                 if (!r.extraAttempted) {

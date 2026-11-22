@@ -46,6 +46,7 @@ struct Params {
     bool rollbackFirmware = false;
     bool rollbackCores = false;
     QString rollbackFirmwareUrl;
+    QString rollbackFirmwarePath;   // локальная копия из backup, если есть
     QString rollbackTargetBuild;
     QString rollbackBackupName;
 };
@@ -57,6 +58,7 @@ struct RollbackInfo {
     QString installedBuild;
     QString targetBuild;
     QString targetUrl;
+    QString firmwarePath;   // непустой, если прошивка взята из backup
     QString firmwareError;
 
     bool coresAvailable = false;
@@ -172,10 +174,12 @@ private:
     bool ensureSelectedCoresDownloaded(const QStringList& selected, int board, QString* error);
     void doPrepareRollback(const Params& p);
     void doRollback(const Params& p);
-    bool findLatestBackupOnSd(const QString& portLocation, QString* backupName, int* coreCount,
+    bool findLatestBackupOnSd(const QString& portLocation, int modelIndex, QString* backupName,
+                              int* coreCount, QString* firmwareBuild, QString* firmwarePath,
                               QString* error);
     bool restoreCoresFromBackup(const QString& portLocation, const QString& backupName,
                                 QString* error);
+    bool cacheFirmwareForBackup(int modelIndex, const QString& build, QString* path, QString* error);
     void doFlash(const Params& p);
     void doOpenSd(const Params& p);
 
@@ -233,7 +237,10 @@ private:
     // игнорирует: их старые файлы тоже переносятся в backup, новые не копируются.
     MscResult updateCoresOnSd(const QString& portLocation, const QStringList& newCores,
                               bool updateExtra, bool updateFirmware,
-                              const QSet<QString>& ignoredCores);
+                              const QSet<QString>& ignoredCores,
+                              const QString& backupFirmwarePath = QString(),
+                              const QString& backupFirmwareBuild = QString(),
+                              int backupModelIndex = -1);
     // MSC-сеанс «только extra»: переключение в MSC, ожидание диска, копирование, eject.
     // Возвращает тот же MscResult, что и updateCoresOnSd, чтобы doFlash обрабатывал
     // прерывание единообразно.

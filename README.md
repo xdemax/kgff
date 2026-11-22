@@ -117,10 +117,12 @@ Atom-лентам коммитов на GitHub (до трёх попыток). �
 - **Cores** — вернуть `.kg` из последнего backup.
 
 Можно выбрать один пункт или оба. Перед подтверждением показываются версии прошивки и имя
-backup-каталога. При откате ядер копируются **все `.kg` из этого backup** в корень карты с
-заменой; ignored-ядра тоже возвращаются. `.kg1/.kg2/.kg3` и остальные файлы не трогаются.
-Дополнительный backup текущих ядер не создаётся: откат односторонний, вернуться можно повторным
-обновлением с GitHub.
+backup-каталога. При создании backup установленная прошивка сохраняется в него как
+`firmware_<build>.uf2`; при BACKUP она используется без интернета, а GitHub нужен только как
+запасной вариант для старых backup-каталогов. При откате ядер копируются **все `.kg` из этого
+backup** в корень карты с заменой; ignored-ядра тоже возвращаются. `.kg1/.kg2/.kg3` и остальные
+файлы не трогаются. Дополнительный backup текущих ядер не создаётся: откат односторонний,
+вернуться можно повторным обновлением с GitHub.
 
 ### Работа с SD-картой вручную
 
@@ -331,7 +333,9 @@ offers two independent options:
 - **Cores** — restore the `.kg` files from the latest backup.
 
 One option or both can be selected. The dialog shows the firmware versions and the backup folder
-name. Core restore copies **all `.kg` files from that backup** over the card root; ignored cores
+name. When a backup is created, the installed firmware is saved into it as `firmware_<build>.uf2`;
+BACKUP uses that file without internet, and GitHub is only a fallback for old backup folders.
+Core restore copies **all `.kg` files from that backup** over the card root; ignored cores
 are restored too. `.kg1/.kg2/.kg3` and other files are left untouched. No additional safety backup
 is created: rollback is one-way, and the user can return by updating from GitHub again.
 
