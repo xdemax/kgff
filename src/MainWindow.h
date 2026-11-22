@@ -10,6 +10,7 @@ class QButtonGroup;
 class QCheckBox;
 class CoreVersionsPanel;
 class QComboBox;
+class QEvent;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -27,6 +28,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
     void onDownload();
@@ -40,6 +42,7 @@ private slots:
     void onStartupFirmwareCheck();
     void onStartupFirmwareCheckFinished();
     void startStartupFlow();
+    void onRollbackPrepared(const RollbackInfo& info);
     void onModelDetected(int modelIndex, const QString& raw);
     void appendLog(const QString& message);
     void appendLogVerbose(const QString& message);
@@ -63,6 +66,8 @@ private:
     void updatePortList(bool userRequested);
     void updatePortPolling();
     void maybeAutoDetectPort();
+    void updateFlashButtonText();
+    bool showRollbackDialog();
     void openLogFile();
     void writeLogLine(const QString& line);
     void cleanupTemp();
@@ -110,6 +115,9 @@ private:
     bool m_coreListPrepared = false;      // список ядер с GitHub уже получен
     bool m_flashStarted = false;
     bool m_flashCores = false;            // в запущенном FLASH обновляются ядра
+    bool m_rollbackPreparing = false;
+    bool m_rollbackReady = false;
+    RollbackInfo m_rollbackInfo;
     bool m_busy = false;
     bool m_closeRequested = false;
     bool m_accessRuleInstalled = false;   // правило udev уже ставилось в этом запуске

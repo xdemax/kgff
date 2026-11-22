@@ -232,6 +232,8 @@ bool Worker::pause(int ms) {
 
 void Worker::runDownload(const Params& p) { guarded([&]() { doDownload(p); }); }
 void Worker::runFlash(const Params& p) { guarded([&]() { doFlash(p); }); }
+void Worker::runPrepareRollback(const Params& p) { guarded([&]() { doPrepareRollback(p); }); }
+void Worker::runRollback(const Params& p) { guarded([&]() { doRollback(p); }); }
 
 bool Worker::downloadExtraArchive(const QString& destPath) {
     emit log(QStringLiteral("Downloading extra content archive..."));
@@ -1223,6 +1225,73 @@ bool Worker::fetchLatestFirmwareVersion(const QString& firmwareFile, QString* ve
     return false;
 }
 
+QList<QPair<QString, QString>> Worker::fetchFirmwareRevisions(const QString& firmwareFile,
+                                                              QString* error) {
+    if (error) error->clear();
+    QList<QPair<QString, QString>> revisions;   // build, commit SHA
+    const QString file = QFileInfo(firmwareFile).fileName();
+    if (file.isEmpty()) {
+        if (error) *error = QStringLiteral("empty firmware file name");
+        return revisions;
+    }
+    const QString encodedFile = QString::fromLatin1(QUrl::toPercentEncoding(file));
+
+    const HttpResult api = httpFetch(
+        QUrl(kFirmwareApiBase + encodedFile + QStringLiteral("&per_page=100")),
+        kMaxTextBytes, nullptr);
+    if (api.ok) {
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(api.body, &parseError);
+        if (parseError.error == QJsonParseError::NoError && doc.isArray()) {
+            for (const QJsonValue& value : doc.array()) {
+                const QJsonObject obj = value.toObject();
+                const QString sha = obj.value(QStringLiteral("sha")).toString();
+                const QString message = obj.value(QStringLiteral("commit")).toObject()
+                                            .value(QStringLiteral("message")).toString();
+                const QString build = firmwareBuildFromText(message);
+                if (!sha.isEmpty() && !build.isEmpty()) {
+                    revisions.append(qMakePair(build, sha));
+                }
+            }
+        }
+    }
+    if (m_cancel.load()) {
+        if (error) *error = QStringLiteral("cancelled");
+        return {};
+    }
+
+    // Atom-лента как запасной источник: GitHub API может упереться в лимит.
+    if (revisions.isEmpty()) {
+        const HttpResult atom = httpFetch(QUrl(firmwareAtomUrlForFile(file)), kMaxTextBytes, nullptr);
+        if (atom.ok) {
+            static const QRegularExpression entryRe(
+                QStringLiteral("<entry>(.*?)</entry>"),
+                QRegularExpression::DotMatchesEverythingOption);
+            static const QRegularExpression shaRe(
+                QStringLiteral("Grit::Commit/([0-9a-fA-F]{40})"));
+            const QString text = QString::fromUtf8(atom.body);
+            QRegularExpressionMatchIterator it = entryRe.globalMatch(text);
+            while (it.hasNext()) {
+                const QString entry = it.next().captured(1);
+                const QString build = firmwareBuildFromText(entry);
+                const QRegularExpressionMatch sha = shaRe.match(entry);
+                if (!build.isEmpty() && sha.hasMatch()) {
+                    revisions.append(qMakePair(build, sha.captured(1)));
+                }
+            }
+        }
+    }
+
+    if (revisions.isEmpty()) {
+        if (error) {
+            *error = api.ok ? QStringLiteral("no firmware builds in the commit history")
+                            : QStringLiteral("GitHub API: ") + api.error;
+        }
+        return {};
+    }
+    return revisions;
+}
+
 void Worker::emitFirmwareStatus(int modelIndex) {
     if (modelIndex < 0) modelIndex = m_boardModelIndex;
     const QString latest = m_latestFirmwareVersions.value(modelIndex);
@@ -1771,6 +1840,248 @@ bool Worker::ensureSelectedCoresDownloaded(const QStringList& rawSelected, int b
                             .arg(marker.errorString()));
     }
     return true;
+}
+
+// BACKUP, шаг 1: только чтение — версия платы, история GitHub и последний
+// непустой backup_* на карте. Ничего не записываем.
+void Worker::doPrepareRollback(const Params& p) {
+    RollbackInfo info;
+    info.modelIndex = p.modelIndex;
+
+    if (p.portLocation.isEmpty()) {
+        info.firmwareError = QStringLiteral("No serial port selected.");
+        info.coresError = QStringLiteral("No serial port selected.");
+        emit rollbackPrepared(info);
+        return;
+    }
+
+    QString raw;
+    QString installed;
+    int board = 0;
+    if (queryVersion(p.portLocation, &raw, &board, &installed)) {
+        info.installedBuild = installed;
+        if (board >= 1 && board <= models().size()) info.modelIndex = board - 1;
+    } else if (!m_cancel.load()) {
+        info.firmwareError = QStringLiteral("Could not read the installed firmware version.");
+    }
+
+    if (!info.installedBuild.isEmpty() && info.modelIndex >= 0 &&
+        info.modelIndex < models().size()) {
+        const QString firmwareFile =
+            QFileInfo(QUrl(models().at(info.modelIndex).firmwareUrl).path()).fileName();
+        QString historyError;
+        const QList<QPair<QString, QString>> revisions =
+            fetchFirmwareRevisions(firmwareFile, &historyError);
+        if (!revisions.isEmpty()) {
+            int installedIndex = -1;
+            for (int i = 0; i < revisions.size(); ++i) {
+                if (revisions.at(i).first == info.installedBuild) {
+                    installedIndex = i;
+                    break;
+                }
+            }
+            if (installedIndex < 0) {
+                info.firmwareError = QStringLiteral("Installed build %1 was not found in the GitHub history.")
+                                         .arg(info.installedBuild);
+            } else if (installedIndex + 1 >= revisions.size()) {
+                info.firmwareError = QStringLiteral("No older firmware build was found.");
+            } else {
+                const QPair<QString, QString>& target = revisions.at(installedIndex + 1);
+                info.targetBuild = target.first;
+                info.targetUrl = QStringLiteral("https://raw.githubusercontent.com/andykarpov/") +
+                                 coresRepo() + QLatin1Char('/') + target.second +
+                                 QStringLiteral("/firmware/") +
+                                 QString::fromLatin1(QUrl::toPercentEncoding(firmwareFile));
+                info.firmwareAvailable = true;
+                emit log(QStringLiteral("BACKUP: firmware %1 -> %2.")
+                             .arg(info.installedBuild, info.targetBuild));
+            }
+        } else if (!m_cancel.load()) {
+            info.firmwareError = historyError.isEmpty()
+                ? QStringLiteral("Could not read the firmware history.")
+                : historyError;
+        }
+    } else if (!m_cancel.load() && info.firmwareError.isEmpty()) {
+        info.firmwareError = QStringLiteral("Installed firmware version is unknown.");
+    }
+
+    if (m_cancel.load()) {
+        info.firmwareError = QStringLiteral("Cancelled.");
+        info.coresError = QStringLiteral("Cancelled.");
+        emit rollbackPrepared(info);
+        return;
+    }
+
+    QString backupName;
+    int coreCount = 0;
+    QString backupError;
+    if (findLatestBackupOnSd(p.portLocation, &backupName, &coreCount, &backupError)) {
+        info.coresAvailable = true;
+        info.backupName = backupName;
+        info.coreCount = coreCount;
+        emit log(QStringLiteral("BACKUP: cores from %1 (%2 .kg).").arg(backupName).arg(coreCount));
+    } else {
+        info.coresError = backupError;
+    }
+
+    emit rollbackPrepared(info);
+}
+
+bool Worker::findLatestBackupOnSd(const QString& portLocation, QString* backupName,
+                                  int* coreCount, QString* error) {
+    if (backupName) backupName->clear();
+    if (coreCount) *coreCount = 0;
+    if (error) error->clear();
+
+    const QSet<QString> before = Platform::readyRemovableDisks();
+    if (!sendMscCommand(portLocation, 1)) {
+        if (error) *error = QStringLiteral("Could not switch the device to MSC mode.");
+        return false;
+    }
+    emit log(QStringLiteral("Waiting for SD Card storage drive to mount..."));
+    Platform::Candidate sd;
+    if (!waitForMountedVolume([&before]() { return Platform::newDisks(before); }, 40000, &sd)) {
+        if (error) *error = QStringLiteral("SD card drive not detected in MSC mode.");
+        return false;
+    }
+
+    const QDir root(sd.mountPoint);
+    QStringList backups = root.entryList(QStringList() << QStringLiteral("backup_*"),
+                                         QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    std::sort(backups.begin(), backups.end(), std::greater<QString>());
+    bool found = false;
+    for (const QString& name : backups) {
+        const QStringList files = listFilesWithExt(joinPath(root.absolutePath(), name), coresExt());
+        if (!files.isEmpty()) {
+            if (backupName) *backupName = name;
+            if (coreCount) *coreCount = files.size();
+            found = true;
+            break;
+        }
+    }
+
+    const bool ejected = ejectBestEffort(sd);
+    emit portsChanged();   // порт мог переименоваться после MSC
+    if (!found) {
+        if (error) *error = QStringLiteral("No non-empty backup_* folder with .kg was found.");
+        return false;
+    }
+    if (!ejected) {
+        if (error) *error = QStringLiteral("SD card could not be ejected after scanning.");
+        return false;
+    }
+    return true;
+}
+
+bool Worker::restoreCoresFromBackup(const QString& portLocation, const QString& backupName,
+                                    QString* error) {
+    if (error) error->clear();
+    if (backupName.isEmpty() || QFileInfo(backupName).fileName() != backupName) {
+        if (error) *error = QStringLiteral("invalid backup folder name");
+        return false;
+    }
+
+    const QSet<QString> before = Platform::readyRemovableDisks();
+    if (!sendMscCommand(portLocation, 1)) {
+        if (error) *error = QStringLiteral("Could not switch the device to MSC mode.");
+        return false;
+    }
+    emit log(QStringLiteral("Waiting for SD Card storage drive to mount..."));
+    Platform::Candidate sd;
+    if (!waitForMountedVolume([&before]() { return Platform::newDisks(before); }, 40000, &sd)) {
+        if (error) *error = QStringLiteral("SD card drive not detected in MSC mode.");
+        return false;
+    }
+    if (!confirmDrive(sd)) {
+        if (error) *error = QStringLiteral("SD card drive was not confirmed.");
+        ejectBestEffort(sd);
+        return false;
+    }
+
+    const QString backupDir = joinPath(sd.mountPoint, backupName);
+    const QStringList files = listFilesWithExt(backupDir, coresExt());
+    if (files.isEmpty()) {
+        if (error) *error = QStringLiteral("Backup folder has no .kg files: ") + backupName;
+        ejectBestEffort(sd);
+        return false;
+    }
+
+    emit log(QStringLiteral("Restoring %1 core(s) from %2...").arg(files.size()).arg(backupName));
+    for (const QString& src : files) {
+        const QString name = QFileInfo(src).fileName();
+        const QString dst = joinPath(sd.mountPoint, name);
+        QString copyError;
+        if (!copyFileSynced(src, dst, &copyError)) {
+            if (error) *error = QStringLiteral("cannot restore %1: %2").arg(name, copyError);
+            ejectBestEffort(sd);
+            return false;
+        }
+        emit logVerbose(QStringLiteral("Restored core: %1").arg(name));
+    }
+
+    if (!ejectBestEffort(sd)) {
+        if (error) *error = QStringLiteral("SD card could not be ejected after restore.");
+        return false;
+    }
+    emit log(QStringLiteral("BACKUP: restored %1 .kg file(s) from %2.").arg(files.size()).arg(backupName));
+    return true;
+}
+
+// BACKUP, шаг 2: выполняется только после подтверждения в диалоге.
+void Worker::doRollback(const Params& p) {
+    if (!p.rollbackFirmware && !p.rollbackCores) {
+        emit log(QStringLiteral("Error: Nothing selected for BACKUP."));
+        return;
+    }
+
+    QString firmwarePath;
+    if (p.rollbackFirmware) {
+        if (p.rollbackFirmwareUrl.isEmpty()) {
+            emit log(QStringLiteral("Error: Previous firmware URL is unknown."));
+            return;
+        }
+        const QString wd = workDir();
+        if (!QDir().mkpath(wd)) {
+            emit log(QStringLiteral("Error: Cannot create working directory."));
+            return;
+        }
+        firmwarePath = wd + QStringLiteral("/rollback_firmware.uf2");
+        QString downloadError;
+        if (!downloadToFile(QUrl(p.rollbackFirmwareUrl), firmwarePath, &downloadError)) {
+            emit log(QStringLiteral("Error: Could not download previous firmware: ") + downloadError);
+            return;
+        }
+        QString why;
+        if (!isValidUf2(firmwarePath, &why)) {
+            emit log(QStringLiteral("Error: Downloaded previous firmware is not a valid UF2: ") + why);
+            QFile::remove(firmwarePath);
+            return;
+        }
+        emit log(QStringLiteral("Previous firmware downloaded: %1.").arg(p.rollbackTargetBuild));
+    }
+
+    if (p.rollbackCores) {
+        QString restoreError;
+        if (!restoreCoresFromBackup(p.portLocation, p.rollbackBackupName, &restoreError)) {
+            emit log(QStringLiteral("Error: Core restore failed: ") + restoreError);
+            return;
+        }
+    }
+
+    if (p.rollbackFirmware) {
+        Params flashParams = p;
+        flashParams.updateFirmware = true;
+        flashParams.updateCores = false;
+        flashParams.updateExtra = false;
+        flashParams.firmwarePath = firmwarePath;
+        flashParams.coreSelectionSet = false;
+        flashParams.selectedCoreFiles.clear();
+        flashParams.ignoredCoreFiles.clear();
+        flashParams.knownCoreFiles.clear();
+        doFlash(flashParams);
+    } else {
+        emit log(QStringLiteral("BACKUP completed: cores restored from %1.").arg(p.rollbackBackupName));
+    }
 }
 
 // ----------------------------------------------------------------------------

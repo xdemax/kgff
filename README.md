@@ -22,6 +22,7 @@
 - **Заменяет ядра** (файлы `.kg`) на SD-карте платы. Старые ядра не удаляются, а переносятся в резервную папку.
 - **Читает версии ядер** из заголовков `.kg` (kgo2) для выбранной модели платы и использует их для сравнения; подробный список пишется в файловый журнал при `--log`.
 - **Сравнивает версии с картой** в правой панели главного окна: зелёным — доступная версия новее, жёлтым — установленная новее, красным — ядро не поддерживается этой платой или его заголовок не читается. Если ядра нет на карте, строка выглядит как `not installed > доступная версия`. Панель свернута по умолчанию, раскрывается кнопкой **`>>`** и автоматически после парсинга ядер; при раскрытии окно центрируется по итоговой ширине обеих половин. Зелёные ядра отмечены, выбор можно изменить вручную или чекбоксом **All selected** (все / ни одного / только новые). Точка ядра имеет три состояния: обновить → **ignored** → пропустить. В состоянии `ignored` строка становится тёмно-серой, в колонке `Installed` пишется `ignored`, новая версия не копируется, а старая версия с карты переносится в `backup_*`, чтобы этого ядра на карте не осталось. Пользовательские ядра, которых нет в GitHub, при этом не трогаются. Список игнорируемых сохраняется между запусками. Ядро `not supported` по умолчанию красное; при выборе точка становится зелёной, при игнорировании — тёмно-серой, после снятия — снова красной.
+- **Откатывает состояние (BACKUP)**: Shift+клик по `FLASH!` открывает откат предыдущей прошивки и/или восстановление `.kg` из последнего backup. Можно выбрать прошивку, ядра или оба пункта.
 - **Открывает SD-карту платы** как обычный диск, чтобы вы могли работать с её файлами напрямую.
 - **Копирует дополнительный контент** (ROM-ы, образы дисков и т.п.) из архива `extra.zip` на SD-карту. Файлы, которые уже есть на карте, заменяются; остальные файлы пользователя не трогаются. Перед копированием проверяется свободное место, а перед распаковкой — распакованный размер архива (лимит 2 ГБ). Симлинки из архива не копируются. **Сейчас функция временно отключена в интерфейсе.**
 
@@ -104,6 +105,22 @@ Atom-лентам коммитов на GitHub (до трёх попыток). �
 `core serial` для прошивки не используется. Пока порт не выбран, список портов проверяется в фоне
 раз в секунду; при появлении control-порта модель определяется автоматически, после чего опрос
 останавливается.
+
+### Откат прошивки и ядер (BACKUP)
+
+Если зажать **Shift**, кнопка **FLASH!** меняется на **BACKUP**. Клик с зажатым Shift запускает
+подготовку отката: программа узнаёт установленную версию прошивки, находит в истории GitHub
+предыдущую сборку для этой модели и последний непустой каталог `backup_*` на SD-карте. Затем
+появляется окно с двумя пунктами:
+
+- **Firmware** — прошить предыдущую сборку;
+- **Cores** — вернуть `.kg` из последнего backup.
+
+Можно выбрать один пункт или оба. Перед подтверждением показываются версии прошивки и имя
+backup-каталога. При откате ядер копируются **все `.kg` из этого backup** в корень карты с
+заменой; ignored-ядра тоже возвращаются. `.kg1/.kg2/.kg3` и остальные файлы не трогаются.
+Дополнительный backup текущих ядер не создаётся: откат односторонний, вернуться можно повторным
+обновлением с GitHub.
 
 ### Работа с SD-картой вручную
 
@@ -220,6 +237,7 @@ copying the firmware and replacing cores on the SD card. Karabas Flasher does al
 - **Replaces cores** (`.kg` files) on the board's SD card. Old cores are not deleted but moved to a backup folder.
 - **Reads core versions** from the `.kg` headers (kgo2) for the selected board model and uses them for comparison; the detailed list goes to the file log with `--log`.
 - **Compares versions with the card** in the right-hand panel of the main window: green means the available version is newer, yellow means the installed version is newer, red means the core is not supported by this board or its header cannot be read. If the core is not on the card, the row shows `not installed > available version`. The panel is collapsed by default, expands with **`>>`** and automatically after core parsing; when expanded, the window is centred using the full width of both halves. Green cores are checked, and the selection can be changed manually or with the **All selected** checkbox (all / none / only new). The core dot has three states: update → **ignored** → skip. An ignored core is dark grey, shows `ignored` in the `Installed` column, the new version is not copied, and the old version on the card is moved to `backup_*` so the core no longer stays on the card. User cores that are not in GitHub are left untouched. The ignore list is kept between runs. A `not supported` core is red by default; selecting turns the dot green, ignoring turns it dark grey, and unchecking turns it red again.
+- **Rolls back the previous state (BACKUP)**: Shift+click on `FLASH!` restores the previous firmware and/or `.kg` files from the latest backup. Firmware, cores, or both can be selected.
 - **Opens the board's SD card** as a regular drive so you can work with its files directly.
 
 Firmware and cores can be updated together or separately — for example, cores only.
@@ -301,6 +319,21 @@ Windows COM port names may be localized, so the flasher identifies the role by t
 The flasher selects `[control]` automatically and marks the ports as `[control]` and `[core serial]` in the list.
 The `core serial` port is not used for flashing. While no port is selected, the port list is checked in the
 background once per second; when the control port appears, the model is detected automatically and the poll stops.
+
+### Firmware and core rollback (BACKUP)
+
+Hold **Shift**: the **FLASH!** button changes to **BACKUP**. A Shift+click prepares a rollback:
+the program reads the installed firmware build, finds the previous build of that model in the
+GitHub history, and locates the latest non-empty `backup_*` folder on the SD card. A dialog then
+offers two independent options:
+
+- **Firmware** — flash the previous build;
+- **Cores** — restore the `.kg` files from the latest backup.
+
+One option or both can be selected. The dialog shows the firmware versions and the backup folder
+name. Core restore copies **all `.kg` files from that backup** over the card root; ignored cores
+are restored too. `.kg1/.kg2/.kg3` and other files are left untouched. No additional safety backup
+is created: rollback is one-way, and the user can return by updating from GitHub again.
 
 ### Working with the SD card manually
 

@@ -12,18 +12,24 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFont>
 #include <QGridLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHash>
 #include <QIcon>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QMetaType>
 #include <QPainter>
 #include <QPen>
 #include <QPixmap>
@@ -396,6 +402,8 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
             Qt::BlockingQueuedConnection);
     m_thread->start();
 
+    qRegisterMetaType<RollbackInfo>("RollbackInfo");
+    connect(m_worker, &Worker::rollbackPrepared, this, &MainWindow::onRollbackPrepared);
     connect(m_downloadBtn, &QPushButton::clicked, this, &MainWindow::onDownload);
     connect(m_fwChk, &QCheckBox::toggled, this, &MainWindow::applyOptionState);
     connect(m_browseBtn, &QPushButton::clicked, this, &MainWindow::onBrowse);
@@ -437,6 +445,7 @@ MainWindow::MainWindow(bool fileLogging, QWidget* parent) : QWidget(parent), m_f
     });
 
     applyOptionState();
+    if (QCoreApplication::instance()) QCoreApplication::instance()->installEventFilter(this);
     if (m_fileLogging) openLogFile();
     appendLog(QStringLiteral("Karabas Flasher v") + QString::fromLatin1(APP_VERSION) + QStringLiteral(" (") +
               QString::fromLatin1(APP_GIT_DESCRIBE) + QLatin1Char(')'));
@@ -559,6 +568,7 @@ void MainWindow::setBusy(bool busy) {
         w->setEnabled(en);
     }
     if (en) m_downloadBtn->setText(tr("Download via GitHub"));
+    updateFlashButtonText();
     applyOptionState();
     if (en) updateActionState();
 }
@@ -589,7 +599,10 @@ void MainWindow::updateActionState() {
         const QString marker = workDir() + QStringLiteral("/extra/extra_complete.txt");
         if (QFile::exists(marker)) canFlash = true;
     }
-    m_flashBtn->setEnabled(canFlash);
+    // BACKUP доступен по Shift+клику, даже если ни одна операция не отмечена:
+    // для него нужен только выбранный порт.
+    const bool hasPort = !m_comCombo->currentData().toString().isEmpty();
+    m_flashBtn->setEnabled(canFlash || hasPort);
 
     // MSC: кнопка активна всегда. Если порт не выбран/отсутствует, при нажатии
     // покажем подсказку про безопасное извлечение (устройство может быть уже в MSC).
@@ -613,13 +626,38 @@ void MainWindow::onDownload() {
 
 void MainWindow::onFlash() {
     if (m_busy) return;
+
+    const bool backup = QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
+    if (backup) {
+        if (m_comCombo->currentData().toString().isEmpty()) {
+            appendLog(QStringLiteral("Error: Select the Karabas control port before BACKUP."));
+            return;
+        }
+        m_rollbackPreparing = true;
+        m_rollbackReady = false;
+        hideCorePanel();
+        setBusy(true);
+        m_flashBtn->setText(tr("Preparing..."));
+        Params p = collectParams();
+        m_worker->clearCancel();
+        QMetaObject::invokeMethod(m_worker, [w = m_worker, p]() { w->runPrepareRollback(p); },
+                                  Qt::QueuedConnection);
+        return;
+    }
+
+    Params p = collectParams();
+    if (!p.updateFirmware && !p.updateCores && !p.updateExtra) {
+        appendLog(QStringLiteral("Error: Nothing to do. Check 'Update firmware', 'Update cores' "
+                                 "or 'Download extra content'."));
+        return;
+    }
+
     m_flashStarted = true;
     m_flashCores = m_coresChk->isChecked();
     // Правая панель во время FLASH не нужна; после обновления ядер её
     // содержимое будет сброшено, чтобы не показывать старые Installed.
     hideCorePanel();
     setBusy(true);
-    const Params p = collectParams();
     m_worker->clearCancel();        // сброс в GUI-потоке до постановки задачи в очередь
     QMetaObject::invokeMethod(m_worker, [w = m_worker, p]() { w->runFlash(p); }, Qt::QueuedConnection);
 }
@@ -686,6 +724,117 @@ void MainWindow::onStartupFirmwareCheckFinished() {
     // Если плату подключили позже и порт появился во время проверки,
     // автоопределение запустится только сейчас.
     if (!m_busy && !m_closeRequested) maybeAutoDetectPort();
+}
+
+void MainWindow::onRollbackPrepared(const RollbackInfo& info) {
+    m_rollbackInfo = info;
+    m_rollbackReady = true;
+}
+
+bool MainWindow::showRollbackDialog() {
+    const RollbackInfo info = m_rollbackInfo;
+    if (!info.firmwareAvailable && !info.coresAvailable) {
+        QStringList reasons;
+        if (!info.firmwareError.isEmpty()) reasons << info.firmwareError;
+        if (!info.coresError.isEmpty()) reasons << info.coresError;
+        QMessageBox::warning(this, tr("Backup"),
+                             tr("Nothing can be restored:\n%1").arg(reasons.join(QLatin1Char('\n'))));
+        return false;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Backup"));
+    auto* layout = new QVBoxLayout(&dialog);
+
+    auto* intro = new QLabel(tr("Restore the previous state?"), &dialog);
+    QFont introFont = intro->font();
+    introFont.setBold(true);
+    intro->setFont(introFont);
+    layout->addWidget(intro);
+
+    auto* fw = new QCheckBox(
+        info.firmwareAvailable
+            ? tr("Firmware: %1 → %2").arg(info.installedBuild, info.targetBuild)
+            : tr("Firmware: not available"),
+        &dialog);
+    fw->setChecked(info.firmwareAvailable);
+    fw->setEnabled(info.firmwareAvailable);
+    if (!info.firmwareAvailable)
+        fw->setToolTip(info.firmwareError);
+    layout->addWidget(fw);
+    if (!info.firmwareAvailable && !info.firmwareError.isEmpty()) {
+        auto* fwError = new QLabel(info.firmwareError, &dialog);
+        fwError->setWordWrap(true);
+        fwError->setStyleSheet(QStringLiteral("color:#e04040;"));
+        layout->addWidget(fwError);
+    }
+
+    auto* cores = new QCheckBox(
+        info.coresAvailable
+            ? tr("Cores: %1 (%2 .kg files)").arg(info.backupName).arg(info.coreCount)
+            : tr("Cores: not available"),
+        &dialog);
+    cores->setChecked(info.coresAvailable);
+    cores->setEnabled(info.coresAvailable);
+    if (!info.coresAvailable)
+        cores->setToolTip(info.coresError);
+    layout->addWidget(cores);
+    if (!info.coresAvailable && !info.coresError.isEmpty()) {
+        auto* coresError = new QLabel(info.coresError, &dialog);
+        coresError->setWordWrap(true);
+        coresError->setStyleSheet(QStringLiteral("color:#e04040;"));
+        layout->addWidget(coresError);
+    }
+
+    auto* warning = new QLabel(
+        tr("Current .kg files will be overwritten without an additional safety backup."), &dialog);
+    warning->setWordWrap(true);
+    warning->setStyleSheet(QStringLiteral("color:#b58900;"));
+    warning->setVisible(info.coresAvailable);
+    layout->addWidget(warning);
+    connect(cores, &QCheckBox::toggled, warning, &QWidget::setVisible);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, &dialog);
+    QPushButton* restore = buttons->addButton(tr("Restore"), QDialogButtonBox::AcceptRole);
+    restore->setDefault(true);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted) return false;
+
+    const bool doFirmware = fw->isChecked();
+    const bool doCores = cores->isChecked();
+    if (!doFirmware && !doCores) {
+        QMessageBox::warning(this, tr("Backup"), tr("Select firmware, cores, or both."));
+        return false;
+    }
+
+    Params p = collectParams();
+    if (info.modelIndex >= 0 && info.modelIndex < m_modelCombo->count()) {
+        p.modelIndex = info.modelIndex;
+    }
+    p.updateFirmware = false;
+    p.updateCores = false;
+    p.updateExtra = false;
+    p.rollbackFirmware = doFirmware;
+    p.rollbackCores = doCores;
+    p.rollbackFirmwareUrl = info.targetUrl;
+    p.rollbackTargetBuild = info.targetBuild;
+    p.rollbackBackupName = info.backupName;
+    p.coreSelectionSet = false;
+    p.selectedCoreFiles.clear();
+    p.ignoredCoreFiles.clear();
+    p.knownCoreFiles.clear();
+
+    m_flashStarted = true;
+    m_flashCores = doCores;
+    hideCorePanel();
+    setBusy(true);
+    m_worker->clearCancel();
+    QMetaObject::invokeMethod(m_worker, [w = m_worker, p]() { w->runRollback(p); },
+                              Qt::QueuedConnection);
+    return true;
 }
 
 void MainWindow::onModelDetected(int modelIndex, const QString& raw) {
@@ -900,6 +1049,27 @@ void MainWindow::maybeAutoDetectPort() {
     onAutoDetectModel();
 }
 
+void MainWindow::updateFlashButtonText() {
+    if (!m_flashBtn || m_busy) return;
+    const bool backup = QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
+    m_flashBtn->setText(backup ? tr("BACKUP") : tr("FLASH!"));
+    m_flashBtn->setToolTip(backup
+        ? tr("Restore the previous firmware and/or the latest core backup.")
+        : tr("Download missing selected cores and flash the board."));
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Shift && !key->isAutoRepeat() && !m_busy) {
+            m_flashBtn->setText(event->type() == QEvent::KeyPress ? tr("BACKUP") : tr("FLASH!"));
+        }
+    } else if (event->type() == QEvent::ApplicationDeactivate && !m_busy) {
+        m_flashBtn->setText(tr("FLASH!"));
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 void MainWindow::onOpenFolder(const QString& path) {
     if (!openInFileManager(path)) {
         appendLog("Warning: Could not open the file manager automatically. Open the folder manually: " + path);
@@ -1032,6 +1202,10 @@ void MainWindow::onFirmwareReady(const QString& path) {
 void MainWindow::onWorkerFinished() {
     const bool startFirmwareCheck = m_startupDetectionPending;
     m_startupDetectionPending = false;
+    const bool showRollback = m_rollbackReady;
+    const bool rollbackPrepareFailed = m_rollbackPreparing && !showRollback;
+    m_rollbackReady = false;
+    m_rollbackPreparing = false;
     if (m_flashStarted) {
         if (m_flashCores) {
             if (m_corePanel) m_corePanel->clear();
@@ -1044,6 +1218,13 @@ void MainWindow::onWorkerFinished() {
         m_flashCores = false;
     }
     setBusy(false);
+    if (showRollback && !m_closeRequested) {
+        showRollbackDialog();
+        return;
+    }
+    if (rollbackPrepareFailed && !m_closeRequested) {
+        appendLog(QStringLiteral("Warning: Could not prepare BACKUP."));
+    }
     if (startFirmwareCheck && !m_closeRequested) {
         QMetaObject::invokeMethod(this, &MainWindow::onStartupFirmwareCheck, Qt::QueuedConnection);
     }

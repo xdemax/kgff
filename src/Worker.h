@@ -2,6 +2,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QList>
+#include <QMetaType>
 #include <QObject>
 #include <QPair>
 #include <QString>
@@ -40,7 +41,32 @@ struct Params {
     // Двухшаговое скачивание ядер: сначала только заголовки/версии, затем
     // полные файлы лишь для выбранных пользователем ядер (их качает FLASH).
     bool prepareCores = false;
+
+    // BACKUP: предыдущая прошивка и последний backup ядер.
+    bool rollbackFirmware = false;
+    bool rollbackCores = false;
+    QString rollbackFirmwareUrl;
+    QString rollbackTargetBuild;
+    QString rollbackBackupName;
 };
+
+// Данные, подготовленные для BACKUP: предыдущая прошивка и последний backup
+// ядер. Показываются в диалоге до каких-либо изменений.
+struct RollbackInfo {
+    bool firmwareAvailable = false;
+    QString installedBuild;
+    QString targetBuild;
+    QString targetUrl;
+    QString firmwareError;
+
+    bool coresAvailable = false;
+    QString backupName;
+    int coreCount = 0;
+    QString coresError;
+
+    int modelIndex = -1;
+};
+Q_DECLARE_METATYPE(RollbackInfo)
 
 // Фоновый исполнитель. Живёт в отдельном QThread, управляется из GUI через
 // QMetaObject::invokeMethod. Отмена - флаг m_cancel, проверяется только в безопасных точках.
@@ -54,6 +80,8 @@ public:
 
     void runDownload(const Params& p);
     void runFlash(const Params& p);
+    void runPrepareRollback(const Params& p);
+    void runRollback(const Params& p);
     void runMsc(const Params& p);
     void runDetectModel(const Params& p);
     // Стартовая проверка последних сборок прошивки для всех моделей.
@@ -78,6 +106,8 @@ signals:
     // Проверка версий на старте закончена (успешно или нет) — можно запускать
     // обычное автоопределение модели.
     void startupFirmwareCheckFinished();
+    // BACKUP: данные для диалога готовы (или недоступны, тогда заполнены ошибки).
+    void rollbackPrepared(const RollbackInfo& info);
     // Статус прошивки для панели ядер: known=false — версия неизвестна.
     void firmwareStatusReady(bool known, bool needsUpdate,
                              const QString& installed, const QString& latest);
@@ -140,6 +170,12 @@ private:
     void doDownload(const Params& p);
     void prepareCores(const Params& p, const ModelInfo& m);
     bool ensureSelectedCoresDownloaded(const QStringList& selected, int board, QString* error);
+    void doPrepareRollback(const Params& p);
+    void doRollback(const Params& p);
+    bool findLatestBackupOnSd(const QString& portLocation, QString* backupName, int* coreCount,
+                              QString* error);
+    bool restoreCoresFromBackup(const QString& portLocation, const QString& backupName,
+                                QString* error);
     void doFlash(const Params& p);
     void doOpenSd(const Params& p);
 
@@ -155,6 +191,9 @@ private:
     bool queryCoreList(const QString& portLocation, int board, QList<CoreFileInfo>* out);
     // Актуальная сборка прошивки из истории каталога firmware на GitHub.
     bool fetchLatestFirmwareVersion(const QString& firmwareFile, QString* version, QString* error);
+    // История сборок прошивки файла: build -> commit SHA (новые сверху).
+    QList<QPair<QString, QString>> fetchFirmwareRevisions(const QString& firmwareFile,
+                                                          QString* error);
     // Сравнить известную версию платы с последней на GitHub и обновить панель.
     void emitFirmwareStatus(int modelIndex = -1);
     // Проверка последнего релиза самого Karabas Flasher.
